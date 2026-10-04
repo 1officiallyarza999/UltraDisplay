@@ -45,6 +45,13 @@ jobs:
           set -o pipefail
           gradle assembleDebug --console=plain 2>&1 | tee build.log
 
+      - name: Unit tests
+        if: success()
+        run: |
+          gradle testDebugUnitTest --console=plain 2>&1 | tail -15
+          grep -rhoE "SPSFIX [a-z]+ [0-9a-f]+" app/build/test-results/ | sort -u > spsfix.txt || true
+          echo "::notice title=SPS::$(sed ':a;N;$!ba;s/\n/%0A/g' spsfix.txt)"
+
       # Surface compiler errors as annotations so they are readable without downloading logs.
       - name: Report build errors
         if: failure()
