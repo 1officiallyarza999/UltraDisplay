@@ -53,7 +53,7 @@ fun Context.glassCard(radiusDp: Float = 26f, padDp: Int = 18): LinearLayout = Li
 fun Context.glassButton(text: String, radiusDp: Float = 22f, sizeSp: Float = 16f, tint: Int = 0): TextView = label(text, sizeSp, true).apply {
     gravity = Gravity.CENTER
     textAlignment = View.TEXT_ALIGNMENT_CENTER
-    background = GlassDrawable(this@glassButton, dp(radiusDp)).also { it.tint = tint }
+    background = GlassDrawable(this@glassButton, dp(radiusDp)).also { it.glassTint = tint }
     setPadding(dpi(14), dpi(14), dpi(14), dpi(14))
     isClickable = true
     pressable()
@@ -89,7 +89,7 @@ class GlassDrawable(context: Context, private val radius: Float) : Drawable() {
     private val rect = RectF()
     private val shineMax = context.dp(70f)
 
-    var tint: Int = 0
+    var glassTint: Int = 0
         set(value) { if (field != value) { field = value; invalidateSelf() } }
 
     override fun onBoundsChange(bounds: Rect) {
@@ -105,7 +105,7 @@ class GlassDrawable(context: Context, private val radius: Float) : Drawable() {
     override fun draw(canvas: Canvas) {
         val r = min(radius, rect.height() / 2)
         canvas.drawRoundRect(rect, r, r, fill)
-        if (tint != 0) { tintPaint.color = tint; canvas.drawRoundRect(rect, r, r, tintPaint) }
+        if (glassTint != 0) { tintPaint.color = glassTint; canvas.drawRoundRect(rect, r, r, tintPaint) }
         canvas.drawRoundRect(rect, r, r, shine)
         canvas.drawRoundRect(rect, r, r, rim)
     }

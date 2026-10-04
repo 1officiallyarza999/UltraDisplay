@@ -298,13 +298,13 @@ class MainActivity : Activity() {
         }
 
         val send = Session.mode == Session.Mode.SEND
-        sendGlass?.tint = if (send) Glass.ACCENT_TINT else 0
-        recvGlass?.tint = if (!send) Glass.ACCENT_TINT else 0
+        sendGlass?.glassTint = if (send) Glass.ACCENT_TINT else 0
+        recvGlass?.glassTint = if (!send) Glass.ACCENT_TINT else 0
         sendCheck?.visibility = if (send) View.VISIBLE else View.INVISIBLE
         recvCheck?.visibility = if (!send) View.VISIBLE else View.INVISIBLE
         qualitySection?.visibility = if (send) View.VISIBLE else View.GONE
         qualityTabs.forEachIndexed { i, (tab, g) ->
-            tab.background = if (i == quality) g.also { it.tint = Glass.ACCENT_TINT } else null
+            tab.background = if (i == quality) g.also { it.glassTint = Glass.ACCENT_TINT } else null
             tab.setTextColor(if (i == quality) Glass.TEXT else Glass.TEXT_2)
         }
 
@@ -316,7 +316,7 @@ class MainActivity : Activity() {
                 else -> Triple("ממתין לחיבור…", 0, false)
             }
             b.text = text
-            (b.background as? GlassDrawable)?.tint = tint
+            (b.background as? GlassDrawable)?.glassTint = tint
             b.alpha = if (enabled) 1f else 0.55f
         }
         touchBtn?.visibility = if (send) View.VISIBLE else View.GONE
