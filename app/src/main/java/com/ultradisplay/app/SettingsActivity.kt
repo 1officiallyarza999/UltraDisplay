@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -75,6 +76,16 @@ class SettingsActivity : Activity() {
             q.addView(toggleRow(tr("איכות אוטומטית", "Automatic quality"),
                 tr("אם הטאבלט מפספס פריימים, קצב הנתונים יורד לבד ועולה בחזרה כשהכל יציב.", "If the tablet drops frames the bitrate lowers itself and comes back when stable."),
                 prefs.adaptive) { v -> prefs.adaptive = v })
+            q.addView(divider())
+            q.addView(toggleRow(tr("התאם את הטלפון לרזולוציית הטאבלט", "Match the phone to the tablet's resolution"),
+                tr("בזמן שיקוף הטלפון עובר לאותה רזולוציה ויחס מסך של הטאבלט — התמונה ממלאת את כל הטאבלט בלי פסים ובלי חיתוך. חוזר לרגיל כשהשידור נעצר. דורש Shizuku.",
+                   "While mirroring, the phone switches to the tablet's resolution and aspect ratio — the picture fills the whole tablet with no bars and no cropping. Back to normal when streaming stops. Needs Shizuku."),
+                prefs.matchTablet) { v -> prefs.matchTablet = v }.also { if (!sender) it.visibility = View.GONE })
+            if (prefs.restoreCmd != null && !Session.streaming) {
+                q.addView(glassButton(tr("החזר את רזולוציית הטלפון עכשיו", "Restore the phone's resolution now"), 18f, 14f).apply {
+                    setOnClickListener { Thread { DisplayMatch.restore(this@SettingsActivity) }.start(); visibility = View.GONE }
+                }, lp(top = 6))
+            }
             q.addView(divider())
             q.addView(toggleRow(tr("פרופיל חכם לפי אפליקציה", "Smart per-app profile"),
                 tr("משחק → פריסט משחק, אפליקציית וידאו → אולטרה. דורש Shizuku.", "Game → Game preset, video app → Ultra. Needs Shizuku."),

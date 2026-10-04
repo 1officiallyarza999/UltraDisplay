@@ -77,6 +77,8 @@ object ShizukuBridge {
             service = s
             val uid = try { s.uid() } catch (_: Exception) { -1 }
             Session.log("Shizuku מחובר (uid $uid) — מגע מלא זמין")
+            // If the app was killed while the phone was matched to the tablet, put the phone back now.
+            app?.let { ctx -> if (!Session.streaming && Prefs.of(ctx).restoreCmd != null) Thread { DisplayMatch.restore(ctx) }.start() }
             refresh()
         }
         override fun onServiceDisconnected(name: ComponentName?) { service = null; bound = false; refresh() }

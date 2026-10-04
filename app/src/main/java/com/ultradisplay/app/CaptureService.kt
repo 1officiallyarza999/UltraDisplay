@@ -149,6 +149,7 @@ class CaptureService : Service() {
                 override fun onStop() { Session.log("שיתוף המסך הסתיים"); stopSelf() }
             }, Handler(Looper.getMainLooper()))
 
+            DisplayMatch.apply(this)
             val m = realMetrics()
             val (codec, cfg) = openEncoder(m.widthPixels, m.heightPixels, quality)
             val input = codec.createInputSurface()
@@ -380,6 +381,7 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         instance = null
+        if (DisplayMatch.active) Thread { DisplayMatch.restore(applicationContext) }.start()
         try { wakeLock?.release() } catch (_: Exception) {}
         wakeLock = null
         AudioForwarder.stop()

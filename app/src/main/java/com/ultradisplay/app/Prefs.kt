@@ -27,5 +27,8 @@ class Prefs private constructor(private val p: SharedPreferences) {
     var screenOff: Boolean get() = b("screenOff", false); set(v) = sb("screenOff", v)
     var adaptive: Boolean get() = b("adaptive", true); set(v) = sb("adaptive", v)
     var smartProfile: Boolean get() = b("smart", true); set(v) = sb("smart", v)
+    var matchTablet: Boolean get() = b("matchTablet", true); set(v) = sb("matchTablet", v)
+    /** Shell command that restores the phone's own resolution; set while it is matched to the tablet. */
+    var restoreCmd: String? get() = p.getString("restoreCmd", null); set(v) = p.edit().putString("restoreCmd", v).apply()
     var forwardInput: Boolean get() = b("forwardInput", true); set(v) = sb("forwardInput", v)
 }
