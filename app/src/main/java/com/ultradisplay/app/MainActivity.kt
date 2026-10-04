@@ -123,7 +123,6 @@ class MainActivity : Activity() {
     private fun showHome() {
         onViewer = false; viewerOpen = false
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        showSystemBars()
         displayTabs.clear()
         val (root, col) = glassScreen()
 
@@ -242,6 +241,7 @@ class MainActivity : Activity() {
         col.addView(diag, lp(top = 16))
 
         setContentView(root)
+        showSystemBars() // only after setContentView: before it the window has no decor view (crash UD10-Main621-NPE)
         updateHome()
     }
 
@@ -607,7 +607,7 @@ class MainActivity : Activity() {
 
     private fun hideSystemBars() {
         if (Build.VERSION.SDK_INT >= 30) {
-            window.insetsController?.let {
+            window.decorView.windowInsetsController?.let {
                 it.hide(WindowInsets.Type.systemBars())
                 it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
@@ -618,7 +618,7 @@ class MainActivity : Activity() {
     }
 
     private fun showSystemBars() {
-        if (Build.VERSION.SDK_INT >= 30) window.insetsController?.show(WindowInsets.Type.systemBars())
+        if (Build.VERSION.SDK_INT >= 30) try { window.decorView.windowInsetsController?.show(WindowInsets.Type.systemBars()) } catch (_: Exception) {}
     }
 
     override fun onDestroy() {
