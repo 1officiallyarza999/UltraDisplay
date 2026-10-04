@@ -48,7 +48,8 @@ jobs:
       - name: Unit tests
         if: success()
         run: |
-          gradle testDebugUnitTest --console=plain 2>&1 | tail -15
+          set -o pipefail
+          gradle testDebugUnitTest --console=plain 2>&1 | tail -25
           grep -rhoE "SPSFIX [a-z]+ [0-9a-f]+" app/build/test-results/ | sort -u > spsfix.txt || true
           echo "::notice title=SPS::$(sed ':a;N;$!ba;s/\n/%0A/g' spsfix.txt)"
 

@@ -2,7 +2,8 @@ package com.ultradisplay.app
 
 /**
  * Rewrites an H.264 SPS so the decoder knows frames never need reordering
- * (VUI bitstream_restriction: max_num_reorder_frames = 0, max_dec_frame_buffering = refs).
+ * (VUI bitstream_restriction: max_num_reorder_frames = 0, max_dec_frame_buffering = refs) when the
+ * encoder did not say so itself — typical for hardware encoders.
  *
  * Without this, many hardware decoders assume the worst case and hold several frames in their
  * picture buffer before showing the first one — on a 60 fps stream that alone is ~100 ms of lag.
@@ -102,6 +103,8 @@ object SpsFixer {
         if (c.u(1) == 1) { c.ue(); c.ue(); c.ue(); c.ue() } // cropping
 
         var mvOver = 1; var bytesDenom = 2; var bitsDenom = 1; var mvH = 16; var mvV = 16
+        // If the stream already declares reordering (B-frames), keep it — zeroing it would break frame order.
+        var reorder = 0
         val hasVui = r.bit(); w.bit(1)
         if (hasVui == 1) {
             if (c.u(1) == 1) { if (c.u(8) == 255) { c.u(16); c.u(16) } }
@@ -114,15 +117,15 @@ object SpsFixer {
             if (nal == 1 || vcl == 1) c.u(1)
             c.u(1) // pic_struct_present
             if (r.bit() == 1) { // existing restriction: keep its limits, replace the buffering values
-                mvOver = r.bit(); bytesDenom = r.ue(); bitsDenom = r.ue(); mvH = r.ue(); mvV = r.ue(); r.ue(); r.ue()
+                mvOver = r.bit(); bytesDenom = r.ue(); bitsDenom = r.ue(); mvH = r.ue(); mvV = r.ue(); reorder = r.ue(); r.ue()
             }
         } else {
             repeat(8) { w.bit(0) } // aspect, overscan, signal, chroma loc, timing, nal hrd, vcl hrd, pic_struct
         }
         w.bit(1) // bitstream_restriction_flag
         w.bit(mvOver); w.ue(bytesDenom); w.ue(bitsDenom); w.ue(mvH); w.ue(mvV)
-        w.ue(0)                      // max_num_reorder_frames
-        w.ue(refs.coerceAtLeast(1))  // max_dec_frame_buffering
+        w.ue(reorder)                                   // max_num_reorder_frames (0 unless declared)
+        w.ue(maxOf(refs, reorder, 1))                   // max_dec_frame_buffering
         w.trailing()
 
         val body = escape(w.bytes())

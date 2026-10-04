@@ -27,8 +27,22 @@ class TabletDecoder(private val surface: Surface) {
     @Volatile var lastQueueDelayMs = 0.0
     private var lastKeyframeRequestNs = 0L
 
+    companion object {
+        /** Turned off for the rest of the session if a decoder ever rejects the rewritten SPS. */
+        @Volatile var spsFix = true
+    }
+    @Volatile private var setupAt = 0L
+    @Volatile private var fixedUsed = false
+    private var origSps: ByteArray? = null
+    private var fixedSps: ByteArray? = null
+
     fun setup(packet: Wire.Packet) {
-        val (sps, pps) = Wire.unpackConfig(packet.bytes)
+        val (rawSps, pps) = Wire.unpackConfig(packet.bytes)
+        val sps = if (spsFix) SpsFixer.fix(rawSps) else rawSps
+        fixedUsed = !sps.contentEquals(rawSps)
+        origSps = rawSps; fixedSps = sps
+        if (fixedUsed) Session.log(tr("מפענח: הוגדר ללא המתנה לפריימים", "Decoder: frame buffering disabled (low-latency SPS)"))
+        setupAt = SystemClock.elapsedRealtime()
         shutdown(synchronized(lock) { detachCodec() })
         val c = try { create(packet, sps, pps, lowLatency = true) }
             catch (e: Exception) { Session.log("מפענח: מצב השהיה נמוכה לא נתמך, עובר למצב רגיל"); create(packet, sps, pps, lowLatency = false) }
@@ -40,6 +54,10 @@ class TabletDecoder(private val surface: Surface) {
         val fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, packet.width, packet.height).apply {
             setByteBuffer("csd-0", ByteBuffer.wrap(sps)); setByteBuffer("csd-1", ByteBuffer.wrap(pps))
             if (lowLatency) {
+                // Vendor switches for decoders that don't honour the standard key (unknown keys are ignored).
+                for (k in arrayOf("vendor.qti-ext-dec-low-latency.enable", "vendor.qti-ext-dec-picture-order.enable",
+                        "vendor.low-latency.enable", "vendor.rtc-ext-dec-low-latency.enable", "vdec-lowlatency", "low-latency"))
+                    setInteger(k, 1)
                 setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
                 setInteger(MediaFormat.KEY_PRIORITY, 0)
                 setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE.toInt())
@@ -72,6 +90,11 @@ class TabletDecoder(private val surface: Surface) {
         }
 
         override fun onError(c: MediaCodec, e: MediaCodec.CodecException) {
+            if (fixedUsed && spsFix && SystemClock.elapsedRealtime() - setupAt < 5000) {
+                // The decoder didn't like the rewritten header: fall back to the original and ask for a fresh start.
+                spsFix = false
+                Session.log(tr("מפענח: חוזר לכותרת המקורית", "Decoder: falling back to the original SPS"))
+            }
             Session.log("מפענח: ${e.diagnosticInfo}")
             ErrorLog.record(ErrorLog.Kind.ERROR, "Decoder: ${e.diagnosticInfo}", e)
             requestKeyframe(force = true)
@@ -80,11 +103,20 @@ class TabletDecoder(private val surface: Surface) {
         override fun onOutputFormatChanged(c: MediaCodec, format: MediaFormat) {}
     }
 
+    /** Some encoders repeat the SPS in front of keyframes: swap in the low-latency version there too. */
+    private fun patchInlineSps(b: ByteArray): ByteArray {
+        val o = origSps; val f = fixedSps
+        if (!fixedUsed || o == null || f == null || b.size < o.size || (b[4].toInt() and 0x1f) != 7) return b
+        for (i in o.indices) if (b[i] != o[i]) return b
+        return f + b.copyOfRange(o.size, b.size)
+    }
+
     private fun feed(c: MediaCodec, index: Int, p: Wire.Packet) {
         try {
             val buf = c.getInputBuffer(index) ?: return
-            buf.clear(); buf.put(p.bytes)
-            c.queueInputBuffer(index, 0, p.bytes.size, p.timestampUs, 0)
+            val data = if (p.bytes.size > 5) patchInlineSps(p.bytes) else p.bytes
+            buf.clear(); buf.put(data)
+            c.queueInputBuffer(index, 0, data.size, p.timestampUs, 0)
         } catch (_: Exception) {}
     }
 

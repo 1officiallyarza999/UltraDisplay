@@ -632,11 +632,11 @@ class MainActivity : Activity() {
 }
 
 /**
- * Receiver-side quality controller. Two bad seconds in a row (dropped frames, falling behind the
- * sender, or slow decoding) step the bitrate down; eight good seconds step it back up.
+ * Receiver-side quality controller. Two bad seconds in a row (dropped frames or falling behind the
+ * sender) step the bitrate down; eight good seconds step it back up.
  */
 class AdaptiveQuality {
-    private val levels = intArrayOf(100, 75, 55, 40)
+    private val levels = intArrayOf(100, 80, 65, 50)
     private var level = 0
     private var bad = 0; private var good = 0
     private var lastDropped = 0L
@@ -647,7 +647,9 @@ class AdaptiveQuality {
     fun onSecond(recvFps: Double, sentFps: Int, dropped: Long, decodeMs: Double) {
         val newDrops = dropped - lastDropped; lastDropped = dropped
         if (sentFps <= 0) return
-        val struggling = newDrops > 0 || (sentFps >= 20 && recvFps < sentFps * 0.85) || decodeMs > 45
+        // Only real throughput problems lower the bitrate. Decoder latency is not caused by bitrate,
+        // so reacting to it would just make the picture worse without making it faster.
+        val struggling = newDrops > 1 || (sentFps >= 20 && recvFps < sentFps * 0.8)
         if (struggling) { bad++; good = 0 } else { good++; bad = 0 }
         val before = level
         if (bad >= 2 && level < levels.size - 1) { level++; bad = 0 }
