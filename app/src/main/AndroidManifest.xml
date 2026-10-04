@@ -58,6 +58,8 @@
 
         <activity android:name=".SettingsActivity" android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"/>
+        <activity android:name=".ErrorLogActivity" android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"/>
         <activity android:name=".OnboardingActivity" android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"/>
 

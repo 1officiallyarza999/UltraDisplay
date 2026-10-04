@@ -347,7 +347,9 @@ class CaptureService : Service() {
                     Session.senderFps = fps
                 }
             }
-        } catch (e: Exception) { if (generation.get() == gen) Session.log("השידור נעצר: ${e.message}") }
+        } catch (e: Exception) {
+            if (generation.get() == gen) { Session.log("השידור נעצר: ${e.message}"); ErrorLog.record(ErrorLog.Kind.ERROR, "Encoder stopped: ${e.message}", e) }
+        }
         finally {
             try { codec.stop() } catch (_: Exception) {}
             try { codec.release() } catch (_: Exception) {}

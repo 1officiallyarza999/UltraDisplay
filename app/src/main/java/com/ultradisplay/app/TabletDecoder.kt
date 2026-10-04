@@ -73,6 +73,7 @@ class TabletDecoder(private val surface: Surface) {
 
         override fun onError(c: MediaCodec, e: MediaCodec.CodecException) {
             Session.log("מפענח: ${e.diagnosticInfo}")
+            ErrorLog.record(ErrorLog.Kind.ERROR, "Decoder: ${e.diagnosticInfo}", e)
             requestKeyframe(force = true)
         }
 

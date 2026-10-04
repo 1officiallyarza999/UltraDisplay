@@ -104,9 +104,13 @@ class SettingsActivity : Activity() {
 
         // About
         val about = card(tr("עוד", "More"), col)
+        val errors = ErrorLog.entries()
+        about.addView(glassButton(tr("יומן שגיאות", "Error log") + if (errors.isNotEmpty()) " (${errors.size})" else "", 18f, 15f).apply {
+            setOnClickListener { startActivity(Intent(this@SettingsActivity, ErrorLogActivity::class.java)) }
+        })
         about.addView(glassButton(tr("הצג שוב את מדריך ההתחלה", "Show the setup guide again"), 18f, 15f).apply {
             setOnClickListener { startActivity(Intent(this@SettingsActivity, OnboardingActivity::class.java)) }
-        })
+        }, lp(top = 8))
         about.addView(label("UltraDisplay v${BuildConfig.VERSION_NAME}", 12f, false, Glass.TEXT_3).apply {
             textAlignment = android.view.View.TEXT_ALIGNMENT_CENTER
         }, lp(top = 12))

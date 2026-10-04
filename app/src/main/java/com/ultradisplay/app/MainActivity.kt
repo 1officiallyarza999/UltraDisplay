@@ -141,28 +141,31 @@ class MainActivity : Activity() {
 
         // A crash from the previous run: show what happened so it can be sent and fixed.
         CrashReporter.pending(this)?.let { report ->
+            val code = CrashReporter.pendingCode(this) ?: "?"
             val c = glassCard(24f, 16)
             (c.background as? GlassDrawable)?.glassTint = Glass.RED_TINT
             c.addView(label(tr("האפליקציה נסגרה בפעם הקודמת", "The app closed unexpectedly last time"), 16f, true))
-            c.addView(label(tr("לחץ \"העתק\" ושלח לי את הטקסט — ככה אדע בדיוק מה לתקן.", "Tap Copy and send me the text so I know exactly what to fix."), 13f, false, Glass.TEXT_2), lp(top = 6))
-            c.addView(label(report.lines().drop(4).firstOrNull { it.contains("Exception") || it.contains("Error") } ?: report.lines().take(3).joinToString(" "),
-                11.5f, false, Glass.TEXT_2).apply { typeface = Typeface.MONOSPACE; textDirection = View.TEXT_DIRECTION_LTR; maxLines = 4 }, lp(top = 8))
+            c.addView(label(tr("קוד קריסה", "Crash code"), 12f, false, Glass.TEXT_3), lp(top = 8))
+            c.addView(label(code, 17f, true, Glass.ACCENT).apply { typeface = Typeface.MONOSPACE; textDirection = View.TEXT_DIRECTION_LTR }, lp(top = 2))
+            c.addView(label(tr("לחץ \"דווח\" כדי לשלוח לי את הפרטים המלאים, או העתק את הקוד ושלח בצ'אט.",
+                "Tap Report to send me the full details, or copy the code and send it in chat."), 13f, false, Glass.TEXT_2), lp(top = 8))
             val btns = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            btns.addView(glassButton(tr("העתק", "Copy"), 18f, 14f, Glass.ACCENT_TINT).apply {
+            btns.addView(glassButton(tr("דווח", "Report"), 18f, 14f, Glass.ACCENT_TINT).apply {
+                setOnClickListener { ErrorLog.reportOnGitHub(this@MainActivity, ErrorLog.entries().filter { it.kind == ErrorLog.Kind.CRASH }.take(1)) }
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            btns.addView(glassButton(tr("העתק", "Copy"), 18f, 14f).apply {
                 setOnClickListener {
-                    val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    cm.setPrimaryClip(android.content.ClipData.newPlainText("UltraDisplay crash", report))
+                    (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+                        .setPrimaryClip(android.content.ClipData.newPlainText("UltraDisplay crash", report))
                     text = tr("הועתק ✓", "Copied ✓")
                 }
-            }, LinearLayout.LayoutParams(0, -2, 1f))
-            btns.addView(glassButton(tr("שתף", "Share"), 18f, 14f).apply {
-                setOnClickListener {
-                    startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, report), null))
-                }
             }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(8) })
-            btns.addView(glassButton(tr("סגור", "Dismiss"), 18f, 14f).apply {
+            btns.addView(glassButton(tr("יומן", "Log"), 18f, 14f).apply {
+                setOnClickListener { startActivity(Intent(this@MainActivity, ErrorLogActivity::class.java)) }
+            }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(8) })
+            btns.addView(glassButton("✕", 18f, 14f).apply {
                 setOnClickListener { CrashReporter.clear(this@MainActivity); showHome() }
-            }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(8) })
+            }, LinearLayout.LayoutParams(dpi(52), -2).apply { marginStart = dpi(8) })
             c.addView(btns, lp(top = 12))
             col.addView(c, lp(top = 18))
         }

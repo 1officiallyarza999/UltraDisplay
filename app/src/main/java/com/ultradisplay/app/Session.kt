@@ -62,7 +62,7 @@ object Session {
     fun set(newLink: Link, newStatus: String) {
         if (newStatus != status || newLink != link) {
             link = newLink; status = newStatus
-            if (newLink == Link.ERROR) log("⚠ $newStatus")
+            if (newLink == Link.ERROR) { log("⚠ $newStatus"); ErrorLog.record(ErrorLog.Kind.ERROR, newStatus) }
         }
     }
 
@@ -74,6 +74,7 @@ object Session {
         thread(name = "usb-reader") { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY); readLoop(w) }
         thread(name = "usb-ping") { pingLoop(w) }
         sendHello()
+        app?.let { CrashReporter.sendToPeer(it) }
     }
 
     fun detach(reason: String) {
@@ -118,6 +119,12 @@ object Session {
                     Wire.TOUCH2 -> TouchInjector.onTouch(p.bytes)
                     Wire.TOUCH -> RemoteTouchService.onRemotePacket(p.bytes)
                     Wire.KEY -> if (p.bytes.size >= 4) TouchInjector.onKey(ByteBuffer.wrap(p.bytes).int)
+                    Wire.CRASH_REPORT -> {
+                        val text = String(p.bytes, Charsets.UTF_8)
+                        val code = text.lineSequence().firstOrNull()?.removePrefix("CODE ") ?: "?"
+                        log(tr("⚠ המכשיר השני קרס בפעם הקודמת: ", "⚠ The other device crashed last time: ") + code)
+                        ErrorLog.record(ErrorLog.Kind.PEER_CRASH, "${peerName.ifBlank { "peer" }}: $code", null, text)
+                    }
                     Wire.KEY2 -> TouchInjector.onKey2(p.bytes)
                     Wire.MOTION2 -> TouchInjector.onMotion2(p.bytes)
                     Wire.BITRATE -> if (p.bytes.size >= 4) CaptureService.setBitratePercent(ByteBuffer.wrap(p.bytes).int)

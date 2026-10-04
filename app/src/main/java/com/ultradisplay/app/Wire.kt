@@ -21,7 +21,7 @@ class Wire(
         const val CONFIG = 1; const val VIDEO = 2; const val TOUCH = 3; const val PING = 4; const val PONG = 5
         const val STATS = 6; const val HELLO = 7; const val STREAM_END = 8
         const val TOUCH2 = 9; const val KEY = 10; const val SENDER_INFO = 11; const val AUDIO = 12
-        const val KEY2 = 13; const val MOTION2 = 14; const val BITRATE = 15
+        const val KEY2 = 13; const val MOTION2 = 14; const val BITRATE = 15; const val CRASH_REPORT = 16
         const val MAX_PACKET = 2_000_000
         fun packConfig(sps: ByteArray, pps: ByteArray): ByteArray = ByteArrayOutputStream().also { b ->
             DataOutputStream(b).use { it.writeInt(sps.size); it.write(sps); it.writeInt(pps.size); it.write(pps) }
