@@ -33,6 +33,7 @@ class CaptureService : Service() {
         const val ACTION_START = "ultra.START"; const val ACTION_START_TABLET = "ultra.START_TABLET"; const val ACTION_STOP = "ultra.STOP"
         const val EXTRA_RESULT = "resultCode"; const val EXTRA_DATA = "resultData"; const val EXTRA_QUALITY = "quality"
         const val CHANNEL = "ultradisplay_capture"
+        fun presetName(i: Int) = when (i) { 0 -> tr("משחק", "Game"); 1 -> tr("מאוזן", "Balanced"); else -> tr("אולטרה", "Ultra") }
         val PRESETS = listOf(
             Preset("משחק", 1280, 60, 8_000_000),
             Preset("מאוזן", 1600, 60, 12_000_000),
@@ -46,6 +47,19 @@ class CaptureService : Service() {
         /** Apply a changed audio-output choice to a running stream. */
         fun restartAudio() { instance?.let { AudioForwarder.start(it, it.projection) } }
 
+        /** Adaptive quality: the receiver asks for a share (40–100%) of the preset bitrate. */
+        fun setBitratePercent(percent: Int) {
+            val svc = instance ?: return
+            if (!Prefs.of(svc).adaptive) return
+            val p = percent.coerceIn(30, 100)
+            if (p == svc.bitratePercent) return
+            svc.bitratePercent = p
+            val rate = svc.baseBitrate * p / 100
+            try { liveCodec?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, rate) }) } catch (_: Exception) {}
+            Session.adaptivePercent = p
+            Session.log(tr("איכות אוטומטית: ", "Auto quality: ") + "$p% (${rate / 1_000_000.0}Mbps)")
+        }
+
         /** Receiver asked for a fresh IDR (it opened late or dropped frames): resend config + keyframe. */
         fun requestKeyframe() {
             liveConfig?.let { cfg -> try { Session.wire?.send(cfg) } catch (_: Exception) {} }
@@ -58,7 +72,13 @@ class CaptureService : Service() {
     private var display: VirtualDisplay? = null
     @Volatile private var running = false
     private var quality = 0
+    /** The user's chosen preset; [quality] may differ while the smart profile overrides it. */
+    private var userQuality = 0
     private var landscape = false
+    @Volatile private var baseBitrate = 8_000_000
+    @Volatile private var bitratePercent = 100
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var lastForeground = ""
     private val generation = AtomicInteger(0)
     private val displayManager get() = getSystemService(DISPLAY_SERVICE) as DisplayManager
 
@@ -99,7 +119,7 @@ class CaptureService : Service() {
         @Suppress("DEPRECATION")
         val data = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
             else intent.getParcelableExtra(EXTRA_DATA) as? Intent
-        quality = intent.getIntExtra(EXTRA_QUALITY, 0).coerceIn(0, PRESETS.size - 1)
+        quality = intent.getIntExtra(EXTRA_QUALITY, 0).coerceIn(0, PRESETS.size - 1); userQuality = quality
         if (result != Activity.RESULT_OK || data == null || Session.wire == null) {
             Session.set(Session.Link.ERROR, "אין חיבור או שלא אושר שיתוף מסך"); stopSelf(); return
         }
@@ -123,6 +143,8 @@ class CaptureService : Service() {
             startLoop(codec, input, cfg, m.widthPixels > m.heightPixels)
             displayManager.registerDisplayListener(rotationListener, Handler(Looper.getMainLooper()))
             AudioForwarder.start(this, proj)
+            keepAwake()
+            startProfileWatcher()
         } catch (e: Exception) {
             Session.set(Session.Link.ERROR, "שגיאת שידור: ${e.message}"); stopSelf()
         }
@@ -133,7 +155,7 @@ class CaptureService : Service() {
     private fun startTablet(intent: Intent) {
         if (Build.VERSION.SDK_INT >= 29) startForeground(7, notification("מסך טאבלט פעיל"), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
         else startForeground(7, notification("מסך טאבלט פעיל"))
-        quality = intent.getIntExtra(EXTRA_QUALITY, 0).coerceIn(0, PRESETS.size - 1)
+        quality = intent.getIntExtra(EXTRA_QUALITY, 0).coerceIn(0, PRESETS.size - 1); userQuality = quality
         val shell = ShizukuBridge.service
         if (shell == null || Session.wire == null || Session.peerW <= 0) {
             Session.set(Session.Link.ERROR, "מסך טאבלט דורש חיבור ו-Shizuku פעיל"); stopSelf(); return
@@ -152,6 +174,7 @@ class CaptureService : Service() {
             startLoop(codec, input, cfg, true)
             thread { ShizukuBridge.launchHome(displayId) }
             AudioForwarder.start(this, null)
+            keepAwake()
         } catch (e: Exception) {
             Session.set(Session.Link.ERROR, "יצירת מסך טאבלט נכשלה: ${e.message}"); stopSelf()
         }
@@ -169,6 +192,7 @@ class CaptureService : Service() {
     private fun startLoop(codec: MediaCodec, input: Surface, cfg: Triple<Int, Int, Preset>, isLandscape: Boolean) {
         val gen = generation.incrementAndGet()
         liveCodec = codec; liveConfig = null; landscape = isLandscape
+        baseBitrate = cfg.third.bitrate; bitratePercent = 100; Session.adaptivePercent = 100
         Session.streamInfo = "${cfg.first}×${cfg.second} · ${cfg.third.fps}fps · ${cfg.third.bitrate / 1_000_000}Mbps"
         Session.log("משדר ${Session.streamInfo}${if (virtualMode) " · מסך טאבלט" else ""}")
         thread(name = "ultra-encoder-$gen") {
@@ -186,16 +210,60 @@ class CaptureService : Service() {
             val m = realMetrics()
             val nowLandscape = m.widthPixels > m.heightPixels
             if (nowLandscape == landscape) return
-            val vd = display ?: return
-            try {
-                val (codec, cfg) = openEncoder(m.widthPixels, m.heightPixels, quality)
-                val input = codec.createInputSurface()
-                codec.start()
-                vd.resize(cfg.first, cfg.second, m.densityDpi)
-                vd.surface = input
-                Session.log(if (nowLandscape) "הטלפון סובב לרוחב" else "הטלפון סובב לאורך")
-                startLoop(codec, input, cfg, nowLandscape)
-            } catch (e: Exception) { Session.log("שגיאה בסיבוב: ${e.message}") }
+            Session.log(if (nowLandscape) tr("הטלפון סובב לרוחב", "Phone rotated to landscape") else tr("הטלפון סובב לאורך", "Phone rotated to portrait"))
+            rebuild()
+        }
+    }
+
+    /** Re-create the encoder for the current orientation and preset (mirror mode). */
+    private fun rebuild() {
+        val vd = display ?: return
+        val m = realMetrics()
+        try {
+            val (codec, cfg) = openEncoder(m.widthPixels, m.heightPixels, quality)
+            val input = codec.createInputSurface()
+            codec.start()
+            vd.resize(cfg.first, cfg.second, m.densityDpi)
+            vd.surface = input
+            startLoop(codec, input, cfg, m.widthPixels > m.heightPixels)
+        } catch (e: Exception) { Session.log(tr("שגיאה בבניית השידור: ", "Stream rebuild error: ") + e.message) }
+    }
+
+    /** Keep the phone awake while streaming so it does not lock mid-game. */
+    @Suppress("DEPRECATION")
+    private fun keepAwake() {
+        if (wakeLock != null) return
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.SCREEN_DIM_WAKE_LOCK, "UltraDisplay:stream").apply { acquire(6 * 60 * 60 * 1000L) }
+    }
+
+    /**
+     * Smart profile: when a game comes to the foreground, switch to the low-latency "game" preset;
+     * for video apps switch to "ultra"; otherwise use the user's choice. Needs Shizuku to see the top app.
+     */
+    private fun startProfileWatcher() {
+        thread(name = "ultra-profile") {
+            while (running) {
+                try { Thread.sleep(2500) } catch (_: InterruptedException) { break }
+                if (!running || virtualMode || !Prefs.of(this).smartProfile) continue
+                val shell = ShizukuBridge.service ?: continue
+                val out = try { shell.exec("dumpsys activity activities | grep -m1 -E 'topResumedActivity|mResumedActivity'") } catch (_: Exception) { continue }
+                val pkg = Regex("""\s([a-zA-Z][\w.]+)/""").find(out)?.groupValues?.get(1) ?: continue
+                if (pkg == lastForeground) continue
+                lastForeground = pkg
+                val info = try { packageManager.getApplicationInfo(pkg, 0) } catch (_: Exception) { null }
+                @Suppress("DEPRECATION")
+                val isGame = info != null && (info.category == android.content.pm.ApplicationInfo.CATEGORY_GAME ||
+                    info.flags and android.content.pm.ApplicationInfo.FLAG_IS_GAME != 0)
+                val isVideo = info?.category == android.content.pm.ApplicationInfo.CATEGORY_VIDEO
+                val want = when { isGame -> 0; isVideo -> 2; else -> userQuality }
+                if (want != quality) {
+                    quality = want
+                    val label = info?.let { packageManager.getApplicationLabel(it).toString() } ?: pkg
+                    Session.log(tr("פרופיל חכם: $label → ${PRESETS[want].label}", "Smart profile: $label → ${presetName(want)}"))
+                    android.os.Handler(Looper.getMainLooper()).post { if (running) rebuild() }
+                }
+            }
         }
     }
 
@@ -288,6 +356,8 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         instance = null
+        try { wakeLock?.release() } catch (_: Exception) {}
+        wakeLock = null
         AudioForwarder.stop()
         running = false
         generation.incrementAndGet()

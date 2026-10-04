@@ -87,6 +87,13 @@ class ShellService : IUltraShell.Stub {
         } finally { event.recycle() }
     }
 
+    override fun injectKeyEvent(event: KeyEvent, displayId: Int) {
+        try {
+            setDisplayId.invoke(event, displayId)
+            injectMethod.invoke(inputManager, event, INJECT_ASYNC)
+        } catch (_: Exception) {}
+    }
+
     override fun injectKey(keyCode: Int, displayId: Int) {
         val now = SystemClock.uptimeMillis()
         for (action in intArrayOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {

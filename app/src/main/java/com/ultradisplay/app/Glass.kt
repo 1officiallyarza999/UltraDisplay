@@ -10,7 +10,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.animation.LinearInterpolator
 import android.view.animation.OvershootInterpolator
+import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import kotlin.math.cos
 import kotlin.math.max
@@ -156,4 +158,127 @@ class LiquidBackground(context: Context) : View(context) {
         paint.shader = RadialGradient(w / 2, h * .4f, big * .85f, intArrayOf(0x00000000, 0x66000000), floatArrayOf(.55f, 1f), Shader.TileMode.CLAMP)
         canvas.drawRect(0f, 0f, w, h, paint)
     }
+}
+
+/** Liquid Glass toggle: a frosted track with a glowing accent when on and a springy knob. */
+class GlassSwitch(context: Context) : View(context) {
+    var checked = false
+        private set
+    var onChange: ((Boolean) -> Unit)? = null
+    private var pos = 0f
+    private val track = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = context.dp(1.1f) }
+    private val knob = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; setShadowLayer(context.dp(3f), 0f, context.dp(1f), 0x55000000) }
+    private val r = RectF()
+
+    init {
+        setLayerType(LAYER_TYPE_SOFTWARE, null)
+        isClickable = true
+        setOnClickListener { set(!checked, animate = true); onChange?.invoke(checked) }
+    }
+
+    fun set(value: Boolean, animate: Boolean = false) {
+        checked = value
+        if (!animate) { pos = if (value) 1f else 0f; invalidate(); return }
+        ValueAnimator.ofFloat(pos, if (value) 1f else 0f).apply {
+            duration = 260; interpolator = OvershootInterpolator(1.6f)
+            addUpdateListener { pos = it.animatedValue as Float; invalidate() }
+        }.start()
+    }
+
+    override fun onMeasure(w: Int, h: Int) = setMeasuredDimension(context.dpi(54), context.dpi(32))
+
+    override fun onDraw(c: Canvas) {
+        val pad = context.dp(1f)
+        r.set(pad, pad, width - pad, height - pad)
+        val rad = r.height() / 2
+        val p = pos.coerceIn(0f, 1f)
+        track.color = blend(0x26FFFFFF, 0xCC2BC8E0.toInt(), p)
+        c.drawRoundRect(r, rad, rad, track)
+        rim.color = blend(0x59FFFFFF, 0x99FFFFFF.toInt(), p)
+        c.drawRoundRect(r, rad, rad, rim)
+        val kr = rad - context.dp(3.5f)
+        val rtl = layoutDirection == LAYOUT_DIRECTION_RTL
+        val start = r.left + rad; val end = r.right - rad
+        val t = if (rtl) 1 - pos else pos
+        c.drawCircle(start + (end - start) * t, r.centerY(), kr, knob)
+    }
+
+    private fun blend(a: Int, b: Int, t: Float): Int {
+        fun ch(s: Int) = s and 0xff
+        val ia = Color.alpha(a) + ((Color.alpha(b) - Color.alpha(a)) * t).toInt()
+        val ir = ch(a shr 16) + ((ch(b shr 16) - ch(a shr 16)) * t).toInt()
+        val ig = ch(a shr 8) + ((ch(b shr 8) - ch(a shr 8)) * t).toInt()
+        val ib = ch(a) + ((ch(b) - ch(a)) * t).toInt()
+        return Color.argb(ia.coerceIn(0, 255), ir.coerceIn(0, 255), ig.coerceIn(0, 255), ib.coerceIn(0, 255))
+    }
+}
+
+fun Context.sectionLabel(text: String) = label(text, 13f, true, Glass.TEXT_3).apply { letterSpacing = 0.04f }
+
+fun Context.lp(top: Int = 0) = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dpi(top) }
+
+/** A settings row: title + optional description on one side, a glass switch on the other. */
+fun Context.toggleRow(title: String, desc: String, value: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit): LinearLayout {
+    val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dpi(10), 0, dpi(10)) }
+    val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    texts.addView(label(title, 16f, true))
+    if (desc.isNotEmpty()) texts.addView(label(desc, 12.5f, false, Glass.TEXT_2), lp(top = 4))
+    row.addView(texts, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dpi(14) })
+    val sw = GlassSwitch(this).apply { set(value); this.onChange = onChange; isEnabled = enabled }
+    row.addView(sw)
+    if (!enabled) row.alpha = 0.5f
+    row.setOnClickListener { if (sw.isEnabled) sw.performClick() }
+    return row
+}
+
+fun Context.divider(): View = View(this).apply {
+    setBackgroundColor(0x1FFFFFFF)
+    layoutParams = LinearLayout.LayoutParams(-1, dpi(1))
+}
+
+/** Segmented control of glass tabs. Tabs are collected in [into] so the caller can paint the selection. */
+fun Context.segmented(items: List<String>, into: MutableList<Pair<TextView, GlassDrawable>>, onPick: (Int) -> Unit): View {
+    val seg = glassCard(22f, 5).apply { orientation = LinearLayout.HORIZONTAL }
+    items.forEachIndexed { i, text ->
+        val g = GlassDrawable(this, dp(18f))
+        val tab = label(text, 15f, true).apply {
+            gravity = Gravity.CENTER; textAlignment = View.TEXT_ALIGNMENT_CENTER
+            setPadding(0, dpi(12), 0, dpi(12)); isClickable = true
+            setOnClickListener { onPick(i) }
+            pressable()
+        }
+        into += tab to g
+        seg.addView(tab, LinearLayout.LayoutParams(0, -2, 1f).apply { if (i > 0) marginStart = dpi(4) })
+    }
+    return seg
+}
+
+fun paintTabs(tabs: List<Pair<TextView, GlassDrawable>>, selected: Int) {
+    tabs.forEachIndexed { i, (tab, g) ->
+        tab.background = if (i == selected) g.also { it.glassTint = Glass.ACCENT_TINT } else null
+        tab.setTextColor(if (i == selected) Glass.TEXT else Glass.TEXT_2)
+    }
+}
+
+/** Shared screen scaffold: animated liquid background + centred scrolling column that respects system bars. */
+fun android.app.Activity.glassScreen(maxWidthDp: Int = 600): Pair<FrameLayout, LinearLayout> {
+    val root = FrameLayout(this)
+    root.layoutDirection = Lang.direction
+    root.addView(LiquidBackground(this), FrameLayout.LayoutParams(-1, -1))
+    val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false; clipToPadding = false; overScrollMode = View.OVER_SCROLL_NEVER }
+    val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    val width = kotlin.math.min(resources.displayMetrics.widthPixels, dpi(maxWidthDp))
+    scroll.addView(col, FrameLayout.LayoutParams(width, -2, Gravity.CENTER_HORIZONTAL))
+    root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+    root.setOnApplyWindowInsetsListener { _, insets ->
+        @Suppress("DEPRECATION")
+        col.setPadding(dpi(18), insets.systemWindowInsetTop + dpi(18), dpi(18), insets.systemWindowInsetBottom + dpi(28))
+        insets
+    }
+    window.statusBarColor = Color.TRANSPARENT
+    window.navigationBarColor = Color.TRANSPARENT
+    @Suppress("DEPRECATION")
+    window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+    return root to col
 }

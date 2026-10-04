@@ -40,15 +40,15 @@ class UsbLink(private val context: Context) {
         busy = true
         worker.execute {
             try { scan() }
-            catch (e: Exception) { Session.set(Session.Link.ERROR, e.message ?: "שגיאת USB") }
+            catch (e: Exception) { Session.set(Session.Link.ERROR, e.message ?: tr("שגיאת USB", "USB error")) }
             finally { busy = false }
         }
     }
 
     fun onPermissionResult(granted: Boolean) {
         permissionAskedAt = 0L
-        if (granted) { Session.log("הרשאת USB אושרה"); connect() }
-        else Session.set(Session.Link.ERROR, "הרשאת USB נדחתה — לחץ \"חבר מחדש\" ואשר")
+        if (granted) { Session.log(tr("הרשאת USB אושרה", "USB permission granted")); connect() }
+        else Session.set(Session.Link.ERROR, tr("הרשאת USB נדחתה — לחץ \"חבר מחדש\" ואשר", "USB permission denied — tap Reconnect and allow"))
     }
 
     fun reset() { permissionAskedAt = 0L; lastScan = "" }
@@ -57,12 +57,12 @@ class UsbLink(private val context: Context) {
     private fun ask(request: () -> Unit) {
         val now = SystemClock.uptimeMillis()
         if (permissionAskedAt != 0L && now - permissionAskedAt < 20_000) {
-            Session.set(Session.Link.CONNECTING, "אשר את בקשת הגישה ל-USB שעל המסך")
+            Session.set(Session.Link.CONNECTING, tr("אשר את בקשת הגישה ל-USB שעל המסך", "Allow the USB access request on screen"))
             return
         }
         permissionAskedAt = now
-        Session.set(Session.Link.CONNECTING, "אשר את בקשת הגישה ל-USB שעל המסך")
-        Session.log("מבקש הרשאת USB")
+        Session.set(Session.Link.CONNECTING, tr("אשר את בקשת הגישה ל-USB שעל המסך", "Allow the USB access request on screen"))
+        Session.log(tr("מבקש הרשאת USB", "Requesting USB permission"))
         request()
     }
 
@@ -78,9 +78,9 @@ class UsbLink(private val context: Context) {
 
         // 2) This device is the USB host.
         val devices = manager.deviceList.values.filter { it.deviceClass != UsbConstants.USB_CLASS_HUB }
-        val summary = if (devices.isEmpty()) "אין התקן במצב מארח"
+        val summary = if (devices.isEmpty()) tr("אין התקן במצב מארח", "no device in host mode")
             else devices.joinToString { "%04x:%04x %s".format(it.vendorId, it.productId, it.productName ?: "") }
-        if (summary != lastScan) { lastScan = summary; Session.log("סריקת USB: $summary") }
+        if (summary != lastScan) { lastScan = summary; Session.log(tr("סריקת USB: ", "USB scan: ") + summary) }
 
         val aoa = devices.firstOrNull { isAoa(it) }
         if (aoa != null) {
@@ -90,7 +90,7 @@ class UsbLink(private val context: Context) {
         val other = devices.firstOrNull()
         if (other == null) {
             if (Session.link != Session.Link.ERROR && Session.link != Session.Link.CONNECTING)
-                Session.set(Session.Link.SEARCHING, "ממתין לחיבור כבל")
+                Session.set(Session.Link.SEARCHING, tr("ממתין לחיבור כבל", "Waiting for cable"))
             return
         }
         if (!manager.hasPermission(other)) { ask { manager.requestPermission(other, permissionIntent()) }; return }
@@ -98,14 +98,14 @@ class UsbLink(private val context: Context) {
     }
 
     private fun switchToAccessory(dev: UsbDevice) {
-        Session.set(Session.Link.CONNECTING, "מעביר את המכשיר השני למצב UltraDisplay…")
-        val c = manager.openDevice(dev) ?: throw IOException("לא ניתן לפתוח את התקן ה-USB")
+        Session.set(Session.Link.CONNECTING, tr("מעביר את המכשיר השני למצב UltraDisplay…", "Switching the other device to UltraDisplay mode…"))
+        val c = manager.openDevice(dev) ?: throw IOException(tr("לא ניתן לפתוח את התקן ה-USB", "Cannot open the USB device"))
         try {
             val v = ByteArray(2)
             val n = c.controlTransfer(0xC0, 51, 0, 0, v, 2, 1000)
             val version = if (n == 2) (v[0].toInt() and 0xff) or ((v[1].toInt() and 0xff) shl 8) else 0
-            if (version < 1) throw IOException("המכשיר השני לא עונה ל-AOA (n=$n). ודא שהכבל תומך בנתונים")
-            Session.log("AOA גרסה $version — שולח פרטי זיהוי")
+            if (version < 1) throw IOException(tr("המכשיר השני לא עונה ל-AOA (n=$n). ודא שהכבל תומך בנתונים", "The other device does not answer AOA (n=$n). Make sure the cable supports data"))
+            Session.log("AOA v$version")
             val labels = arrayOf(MANUFACTURER, MODEL, "UltraDisplay wired screen", "0.2",
                 "https://github.com/1officiallyarza999/UltraDisplay", "UD-0002")
             labels.forEachIndexed { index, label ->
@@ -115,7 +115,7 @@ class UsbLink(private val context: Context) {
             if (c.controlTransfer(0x40, 53, 0, 0, null, 0, 1000) < 0) throw IOException("AOA: פקודת ההתחלה נדחתה")
         } finally { c.close() }
 
-        Session.log("המכשיר השני מתחבר מחדש במצב AOA…")
+        Session.log(tr("המכשיר השני מתחבר מחדש במצב AOA…", "Other device re-enumerating in AOA mode…"))
         val deadline = SystemClock.uptimeMillis() + 8000
         while (SystemClock.uptimeMillis() < deadline) {
             Thread.sleep(300)
@@ -123,7 +123,7 @@ class UsbLink(private val context: Context) {
             if (!manager.hasPermission(aoa)) { permissionAskedAt = 0L; ask { manager.requestPermission(aoa, permissionIntent()) }; return }
             openAoa(aoa); return
         }
-        throw IOException("המכשיר השני לא חזר במצב AOA. ודא ש-UltraDisplay מותקן ופתוח בו")
+        throw IOException(tr("המכשיר השני לא חזר במצב AOA. ודא ש-UltraDisplay מותקן ופתוח בו", "The other device did not return in AOA mode. Make sure UltraDisplay is installed and open on it"))
     }
 
     private fun openAoa(dev: UsbDevice) {
@@ -147,14 +147,14 @@ class UsbLink(private val context: Context) {
             try { c.releaseInterface(iface) } catch (_: Exception) {}
             c.close()
         }
-        Session.attach(wire, "מארח USB")
+        Session.attach(wire, tr("מארח USB", "USB host"))
     }
 
     private fun openAccessory(accessory: UsbAccessory) {
         val pfd = manager.openAccessory(accessory) ?: throw IOException("openAccessory נכשל")
         val fd = pfd.fileDescriptor
         val wire = Wire(FileInputStream(fd), FileOutputStream(fd)) { pfd.close() }
-        Session.attach(wire, "אביזר USB")
+        Session.attach(wire, tr("אביזר USB", "USB accessory"))
     }
 
     fun close() { worker.shutdownNow() }

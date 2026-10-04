@@ -72,6 +72,39 @@ object TouchInjector {
         try { shell.injectTouch(ev, targetDisplay) } catch (_: Exception) {} finally { ev.recycle() }
     }
 
+    /** KEY2: action(1) source(4) keyCode(4) meta(4) repeat(4) scanCode(4) — keyboards and gamepad buttons. */
+    fun onKey2(bytes: ByteArray) {
+        val shell = ShizukuBridge.service ?: return
+        if (bytes.size < 21) return
+        val b = ByteBuffer.wrap(bytes)
+        val action = b.get().toInt(); val source = b.int; val code = b.int; val meta = b.int; val repeat = b.int; val scan = b.int
+        val now = SystemClock.uptimeMillis()
+        val ev = KeyEvent(now, now, action, code, repeat, meta, android.view.KeyCharacterMap.VIRTUAL_KEYBOARD, scan, 0, source)
+        try { shell.injectKeyEvent(ev, targetDisplay) } catch (_: Exception) {}
+    }
+
+    /**
+     * MOTION2: source(4) action(4) x(4f) y(4f) count(1) then count × [axis(1) value(4f)].
+     * Mouse wheel (x/y normalised to the screen) and gamepad sticks/triggers.
+     */
+    fun onMotion2(bytes: ByteArray) {
+        val shell = ShizukuBridge.service ?: return
+        if (bytes.size < 17) return
+        val b = ByteBuffer.wrap(bytes)
+        val source = b.int; val action = b.int; val nx = b.float; val ny = b.float
+        val n = (b.get().toInt() and 0xff).coerceAtMost((bytes.size - 17) / 5)
+        if (targetDisplay == 0) refreshScreen()
+        val w = if (targetDisplay != 0) targetW else screenW
+        val h = if (targetDisplay != 0) targetH else screenH
+        val mouse = source and InputDevice.SOURCE_MOUSE == InputDevice.SOURCE_MOUSE
+        val p = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = if (mouse) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_UNKNOWN })
+        val c = arrayOf(MotionEvent.PointerCoords().apply { x = nx * w; y = ny * h })
+        repeat(n) { val axis = b.get().toInt() and 0xff; c[0].setAxisValue(axis, b.float) }
+        val now = SystemClock.uptimeMillis()
+        val ev = MotionEvent.obtain(now, now, action, 1, p, c, 0, 0, 1f, 1f, 0, 0, source, 0)
+        try { shell.injectTouch(ev, targetDisplay) } catch (_: Exception) {} finally { ev.recycle() }
+    }
+
     fun onKey(keyCode: Int) {
         val shell = ShizukuBridge.service ?: return
         if (keyCode == KeyEvent.KEYCODE_HOME && targetDisplay != 0) {

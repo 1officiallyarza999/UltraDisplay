@@ -1,5 +1,6 @@
 package com.ultradisplay.app;
 
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.Surface;
 import android.os.ParcelFileDescriptor;
@@ -18,4 +19,5 @@ interface IUltraShell {
     /** Capture the whole audio output (REMOTE_SUBMIX); the phone's own speaker goes silent while active. */
     ParcelFileDescriptor startAudio(int sampleRate) = 7;
     void stopAudio() = 8;
+    oneway void injectKeyEvent(in KeyEvent event, int displayId) = 9;
 }

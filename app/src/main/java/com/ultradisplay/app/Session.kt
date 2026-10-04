@@ -22,7 +22,7 @@ object Session {
     @Volatile var mode: Mode = Mode.SEND
     @Volatile var link: Link = Link.IDLE
     @Volatile var usbRole: String = ""
-    @Volatile var status: String = "ממתין לחיבור כבל"
+    @Volatile var status: String = tr("ממתין לחיבור כבל", "Waiting for cable")
     @Volatile var rttMs: Double = 0.0
     @Volatile var streaming: Boolean = false
     @Volatile var streamInfo: String = ""
@@ -36,6 +36,7 @@ object Session {
     @Volatile var senderFps = 0
     @Volatile var senderVirtual = false
     @Volatile var senderShizuku = false
+    @Volatile var adaptivePercent = 100
 
     /** Last stream configuration received (receiver side), so a viewer opened later can start decoding. */
     @Volatile var lastConfig: Wire.Packet? = null
@@ -68,7 +69,7 @@ object Session {
     fun attach(w: Wire, role: String) {
         wire?.close()
         wire = w; usbRole = role; peerMode = null; peerName = ""; lastConfig = null; rttMs = 0.0
-        set(Link.CONNECTED, "מחובר בכבל ($role)")
+        set(Link.CONNECTED, tr("מחובר בכבל ($role)", "Connected by cable ($role)"))
         log("חיבור נוצר — המכשיר הזה הוא $role")
         thread(name = "usb-reader") { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY); readLoop(w) }
         thread(name = "usb-ping") { pingLoop(w) }
@@ -117,6 +118,9 @@ object Session {
                     Wire.TOUCH2 -> TouchInjector.onTouch(p.bytes)
                     Wire.TOUCH -> RemoteTouchService.onRemotePacket(p.bytes)
                     Wire.KEY -> if (p.bytes.size >= 4) TouchInjector.onKey(ByteBuffer.wrap(p.bytes).int)
+                    Wire.KEY2 -> TouchInjector.onKey2(p.bytes)
+                    Wire.MOTION2 -> TouchInjector.onMotion2(p.bytes)
+                    Wire.BITRATE -> if (p.bytes.size >= 4) CaptureService.setBitratePercent(ByteBuffer.wrap(p.bytes).int)
                     Wire.STATS -> CaptureService.requestKeyframe()
                     Wire.SENDER_INFO -> if (p.bytes.size >= 6) {
                         val b = ByteBuffer.wrap(p.bytes)
