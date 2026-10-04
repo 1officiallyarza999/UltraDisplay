@@ -5,7 +5,13 @@ plugins {
 android {
     namespace = "com.ultradisplay.app"
     compileSdk = 35
-    defaultConfig { applicationId = "com.ultradisplay.app"; minSdk = 26; targetSdk = 35; versionCode = 3; versionName = "0.2.1" }
+    defaultConfig { applicationId = "com.ultradisplay.app"; minSdk = 26; targetSdk = 35; versionCode = 4; versionName = "0.3.0" }
+    buildFeatures { aidl = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
+}
+dependencies {
+    // Shizuku: optional elevated (adb-level) access for real touch injection and tablet-sized virtual displays.
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
 }
