@@ -8,6 +8,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <!-- Foreground service for the tablet-screen mode (no MediaProjection involved). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
@@ -64,7 +65,13 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"/>
 
         <!-- Owns the USB connection in the background so it survives closing the app. -->
-        <service android:name=".LinkService" android:foregroundServiceType="connectedDevice" android:exported="false"/>
+        <service android:name=".LinkService" android:foregroundServiceType="connectedDevice|specialUse" android:exported="false">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the user's USB cable link between their phone and tablet open"/>
+        </service>
+        <!-- Crash screen in its own process so it works even when the main process keeps crashing. -->
+        <activity android:name=".CrashActivity" android:process=":crash" android:exported="false"
+            android:excludeFromRecents="true" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"/>
         <receiver android:name=".BootReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
@@ -72,7 +79,10 @@
             </intent-filter>
         </receiver>
 
-        <service android:name=".CaptureService" android:foregroundServiceType="mediaProjection|connectedDevice" android:exported="false"/>
+        <service android:name=".CaptureService" android:foregroundServiceType="mediaProjection|connectedDevice|specialUse" android:exported="false">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Streams the user's phone screen to their own tablet over a USB cable"/>
+        </service>
 
         <provider
             android:name="rikka.shizuku.ShizukuProvider"

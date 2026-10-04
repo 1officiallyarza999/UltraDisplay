@@ -145,6 +145,7 @@ class LiquidBackground(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         val w = width.toFloat(); val h = height.toFloat()
+        if (w < 2f || h < 2f) return // RadialGradient rejects a zero radius
         canvas.drawRect(0f, 0f, w, h, base)
         val big = max(w, h)
         for (b in blobs) {

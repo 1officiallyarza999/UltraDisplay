@@ -112,9 +112,13 @@ object CrashReporter {
     private const val FILE = "last_crash.txt"
     private const val SENT = "last_crash.sent"
 
+    private fun isCrashProcess(): Boolean =
+        android.os.Build.VERSION.SDK_INT >= 28 && Application.getProcessName().endsWith(":crash")
+
     fun install(ctx: Context) {
         val app = ctx.applicationContext
         val previous = Thread.getDefaultUncaughtExceptionHandler()
+        if (isCrashProcess()) return // never loop: the crash screen itself uses the default handler
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             try {
                 val code = ErrorLog.code(error)
@@ -129,6 +133,12 @@ object CrashReporter {
                 File(app.filesDir, SENT).delete()
                 ErrorLog.record(ErrorLog.Kind.CRASH, "${error.javaClass.simpleName}: ${error.message ?: ""}", error,
                     "thread ${thread.name}\n--- log ---\n" + Session.logText(15))
+            } catch (_: Throwable) {}
+            // Show our own crash screen instead of the system "keeps stopping" dialog.
+            try {
+                app.startActivity(Intent(app, CrashActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
+                android.os.Process.killProcess(android.os.Process.myPid())
+                kotlin.system.exitProcess(10)
             } catch (_: Throwable) {}
             previous?.uncaughtException(thread, error)
         }

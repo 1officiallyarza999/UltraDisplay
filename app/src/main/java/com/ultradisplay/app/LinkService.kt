@@ -28,7 +28,12 @@ class LinkService : Service() {
         @Volatile var instance: LinkService? = null; private set
 
         fun start(ctx: Context, action: String = ACTION_CONNECT) {
-            try { ctx.startForegroundService(Intent(ctx, LinkService::class.java).setAction(action)) } catch (_: Exception) {}
+            // A plain start is allowed while the app is on screen and can never hit the "did not call
+            // startForeground in time" crash; the service promotes itself to foreground in onCreate.
+            val i = Intent(ctx, LinkService::class.java).setAction(action)
+            try { ctx.startService(i) } catch (e: Exception) {
+                ErrorLog.record(ErrorLog.Kind.ERROR, "LinkService start refused: ${e.javaClass.simpleName}", e)
+            }
         }
         fun connectNow(ctx: Context) { instance?.link?.connect() ?: start(ctx) }
         fun reset() { instance?.link?.reset() }
@@ -100,9 +105,18 @@ class LinkService : Service() {
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setContentTitle("UltraDisplay").setContentText(text).setOngoing(true).setContentIntent(openApp())
             .build()
-        if (Build.VERSION.SDK_INT >= 29) startForeground(11, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
-        else startForeground(11, n)
+        if (Build.VERSION.SDK_INT < 29) { startForeground(11, n); return }
+        try { startForeground(11, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE); return }
+        catch (e: Exception) { if (!fgsWarned) ErrorLog.record(ErrorLog.Kind.ERROR, "FGS connectedDevice refused", e) }
+        if (Build.VERSION.SDK_INT >= 34) {
+            try { startForeground(11, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE); return }
+            catch (e: Exception) { if (!fgsWarned) ErrorLog.record(ErrorLog.Kind.ERROR, "FGS specialUse refused", e) }
+        }
+        // Keep running as a normal service while the app is open rather than crashing.
+        if (!fgsWarned) Session.log(tr("⚠ אנדרואיד לא אישר חיבור ברקע — יעבוד כשהאפליקציה פתוחה", "⚠ Android refused background mode — works while the app is open"))
+        fgsWarned = true
     }
+    private var fgsWarned = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -130,7 +144,7 @@ class LinkService : Service() {
             if (prefs.tabletMode && ShizukuBridge.ready && Session.peerW > 0) {
                 Session.log(tr("מתחיל מסך טאבלט אוטומטית", "Starting tablet screen automatically"))
                 try {
-                    startForegroundService(Intent(this, CaptureService::class.java)
+                    startService(Intent(this, CaptureService::class.java)
                         .setAction(CaptureService.ACTION_START_TABLET).putExtra(CaptureService.EXTRA_QUALITY, prefs.preset))
                 } catch (e: Exception) {
                     // Android may refuse to start it while the app is in the background: ask the user to tap instead.
@@ -179,7 +193,7 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
             val p = Prefs.of(ctx)
-            if (p.autoConnect && p.onboarded) LinkService.start(ctx)
+            if (p.autoConnect && p.onboarded) try { LinkService.start(ctx) } catch (_: Exception) {}
         }
     }
 }

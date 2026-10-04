@@ -348,7 +348,7 @@ class MainActivity : Activity() {
             when {
                 !ShizukuBridge.ready -> Session.set(Session.Link.ERROR, tr("מסך טאבלט דורש Shizuku פעיל", "Tablet screen needs Shizuku running"))
                 Session.peerW <= 0 -> Session.set(Session.Link.ERROR, tr("עדכן את UltraDisplay גם בטאבלט", "Update UltraDisplay on the tablet too"))
-                else -> startForegroundService(Intent(this, CaptureService::class.java)
+                else -> startCapture(Intent(this, CaptureService::class.java)
                     .setAction(CaptureService.ACTION_START_TABLET).putExtra(CaptureService.EXTRA_QUALITY, prefs.preset))
             }
             return
@@ -369,6 +369,14 @@ class MainActivity : Activity() {
         if (requestCode == 6 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED && Session.streaming) CaptureService.restartAudio()
     }
 
+    /** The app is on screen here, so a plain start is allowed and avoids the foreground-start timeout crash. */
+    private fun startCapture(intent: Intent) {
+        try { startService(intent) } catch (e: Exception) {
+            ErrorLog.record(ErrorLog.Kind.ERROR, "Capture start refused", e)
+            Session.set(Session.Link.ERROR, tr("לא ניתן להתחיל שידור: ", "Cannot start streaming: ") + e.javaClass.simpleName)
+        }
+    }
+
     private fun stopCapture() { startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_STOP)) }
 
     @Deprecated("Deprecated in Java")
@@ -377,7 +385,7 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQUEST_CAPTURE) return
         if (resultCode == RESULT_OK && data != null) {
-            startForegroundService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_START)
+            startCapture(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_START)
                 .putExtra(CaptureService.EXTRA_RESULT, resultCode).putExtra(CaptureService.EXTRA_DATA, data)
                 .putExtra(CaptureService.EXTRA_QUALITY, prefs.preset))
         } else Session.log(tr("שיתוף המסך לא אושר", "Screen sharing was not approved"))

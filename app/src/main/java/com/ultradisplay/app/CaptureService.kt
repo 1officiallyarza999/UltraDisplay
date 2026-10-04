@@ -91,6 +91,19 @@ class CaptureService : Service() {
             NotificationChannel(CHANNEL, "שיתוף מסך", NotificationManager.IMPORTANCE_LOW))
     }
 
+    /** Foreground promotion that never throws: connectedDevice, then specialUse, else report failure. */
+    private fun promote(text: String): Boolean {
+        val n = notification(text)
+        if (Build.VERSION.SDK_INT < 29) return try { startForeground(7, n); true } catch (_: Exception) { false }
+        try { startForeground(7, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE); return true }
+        catch (e: Exception) { ErrorLog.record(ErrorLog.Kind.ERROR, "FGS connectedDevice refused (capture)", e) }
+        if (Build.VERSION.SDK_INT >= 34) {
+            try { startForeground(7, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE); return true }
+            catch (e: Exception) { ErrorLog.record(ErrorLog.Kind.ERROR, "FGS specialUse refused (capture)", e) }
+        }
+        return false
+    }
+
     private fun notification(text: String): Notification {
         val stopIntent = PendingIntent.getService(this, 1, Intent(this, CaptureService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -113,8 +126,13 @@ class CaptureService : Service() {
     // ───────────── Mirror mode ─────────────
 
     private fun startMirror(intent: Intent) {
-        if (Build.VERSION.SDK_INT >= 29) startForeground(7, notification("המסך משותף דרך הכבל"), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        else startForeground(7, notification("המסך משותף דרך הכבל"))
+        try {
+            if (Build.VERSION.SDK_INT >= 29) startForeground(7, notification(tr("המסך משותף דרך הכבל", "Sharing the screen over the cable")), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            else startForeground(7, notification(tr("המסך משותף דרך הכבל", "Sharing the screen over the cable")))
+        } catch (e: Exception) {
+            ErrorLog.record(ErrorLog.Kind.ERROR, "FGS mediaProjection refused", e)
+            Session.set(Session.Link.ERROR, tr("אנדרואיד לא אישר את שיתוף המסך", "Android refused screen sharing")); stopSelf(); return
+        }
         val result = intent.getIntExtra(EXTRA_RESULT, Activity.RESULT_CANCELED)
         @Suppress("DEPRECATION")
         val data = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
@@ -153,8 +171,9 @@ class CaptureService : Service() {
     // ───────────── Tablet (virtual display) mode ─────────────
 
     private fun startTablet(intent: Intent) {
-        if (Build.VERSION.SDK_INT >= 29) startForeground(7, notification("מסך טאבלט פעיל"), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
-        else startForeground(7, notification("מסך טאבלט פעיל"))
+        if (!promote(tr("מסך טאבלט פעיל", "Tablet screen active"))) {
+            Session.set(Session.Link.ERROR, tr("אנדרואיד לא אישר את מסך הטאבלט", "Android refused the tablet screen")); stopSelf(); return
+        }
         quality = intent.getIntExtra(EXTRA_QUALITY, 0).coerceIn(0, PRESETS.size - 1); userQuality = quality
         val shell = ShizukuBridge.service
         if (shell == null || Session.wire == null || Session.peerW <= 0) {
