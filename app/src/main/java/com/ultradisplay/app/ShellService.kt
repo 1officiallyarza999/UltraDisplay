@@ -5,6 +5,10 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.os.ParcelFileDescriptor
 import android.os.Build
 import android.os.Process
 import android.os.SystemClock
@@ -26,6 +30,7 @@ class ShellService : IUltraShell.Stub {
     constructor(context: Context) : super() { this.context = context }
 
     private var display: VirtualDisplay? = null
+    @Volatile private var record: AudioRecord? = null
 
     private val inputManager: Any by lazy {
         if (Build.VERSION.SDK_INT >= 34)
@@ -41,6 +46,7 @@ class ShellService : IUltraShell.Stub {
     }
 
     override fun destroy() {
+        stopAudio()
         releaseDisplay()
         System.exit(0)
     }
@@ -90,6 +96,45 @@ class ShellService : IUltraShell.Stub {
                 injectMethod.invoke(inputManager, ev, INJECT_ASYNC)
             } catch (_: Exception) {}
         }
+    }
+
+    override fun startAudio(sampleRate: Int): ParcelFileDescriptor {
+        stopAudio()
+        val ctx = context ?: throw IllegalStateException("Shizuku is too old: update Shizuku to v13 or newer")
+        val format = AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .setSampleRate(sampleRate).setChannelMask(AudioFormat.CHANNEL_IN_STEREO).build()
+        val min = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT)
+        val builder = AudioRecord.Builder()
+            .setAudioSource(MediaRecorder.AudioSource.REMOTE_SUBMIX)
+            .setAudioFormat(format)
+            .setBufferSizeInBytes(maxOf(min, 7680))
+        if (Build.VERSION.SDK_INT >= 31) builder.setContext(ShellContext(ctx))
+        @Suppress("MissingPermission")
+        val rec = builder.build()
+        if (rec.state != AudioRecord.STATE_INITIALIZED) { rec.release(); throw IllegalStateException("AudioRecord init failed") }
+        rec.startRecording()
+        record = rec
+        val pipe = ParcelFileDescriptor.createPipe()
+        val out = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+            val buf = ByteArray(1920) // 10 ms of 48 kHz stereo 16-bit
+            try {
+                while (record === rec) {
+                    val n = rec.read(buf, 0, buf.size)
+                    if (n > 0) out.write(buf, 0, n) else if (n < 0) break
+                }
+            } catch (_: Exception) {
+            } finally { try { out.close() } catch (_: Exception) {} }
+        }, "shell-audio").start()
+        return pipe[0]
+    }
+
+    override fun stopAudio() {
+        val r = record ?: return
+        record = null
+        try { r.stop() } catch (_: Exception) {}
+        try { r.release() } catch (_: Exception) {}
     }
 
     override fun exec(command: String): String = try {

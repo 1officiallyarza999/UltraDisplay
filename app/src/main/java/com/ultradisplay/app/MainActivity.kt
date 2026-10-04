@@ -43,6 +43,9 @@ class MainActivity : Activity() {
     private var touchBtn: TextView? = null
     private var senderSection: View? = null
     private val displayTabs = mutableListOf<Pair<TextView, GlassDrawable>>()
+    private val audioTabs = mutableListOf<Pair<TextView, GlassDrawable>>()
+    private var audioHint: TextView? = null
+    private var muteBtn: TextView? = null
     private var shizukuDot: View? = null
     private var shizukuTitle: TextView? = null
     private var shizukuText: TextView? = null
@@ -93,6 +96,8 @@ class MainActivity : Activity() {
         }
         quality = prefs.getInt("preset", 0)
         tabletMode = prefs.getBoolean("tablet", false)
+        AudioForwarder.output = AudioForwarder.Output.values()[prefs.getInt("audio", 0).coerceIn(0, 2)]
+        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
         Session.init(this); TouchInjector.init(this); ShizukuBridge.init(this)
         link = UsbLink(applicationContext)
 
@@ -142,7 +147,7 @@ class MainActivity : Activity() {
         onViewer = false
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         showSystemBars()
-        qualityTabs.clear(); displayTabs.clear()
+        qualityTabs.clear(); displayTabs.clear(); audioTabs.clear()
 
         val root = FrameLayout(this)
         root.layoutDirection = View.LAYOUT_DIRECTION_RTL
@@ -215,6 +220,17 @@ class MainActivity : Activity() {
             quality = i; prefs.edit().putInt("preset", i).apply(); updateHome()
         }, lp(top = 10))
         sender.addView(label("משחק = 1280 · 60fps · השהיה הכי נמוכה (מומלץ ל-COD).  אולטרה = 1920 · 60fps · הכי חד. אם המכשיר לא עומד בזה, האיכות יורדת אוטומטית.", 12f, false, Glass.TEXT_3), lp(top = 8))
+        sender.addView(sectionLabel("פלט שמע"), lp(top = 22))
+        sender.addView(segmented(listOf("טאבלט", "שניהם", "טלפון"), audioTabs) { i ->
+            AudioForwarder.output = AudioForwarder.Output.values()[i]
+            prefs.edit().putInt("audio", i).apply()
+            if (needsAudioPermission()) requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 6)
+            else if (Session.streaming) CaptureService.restartAudio()
+            updateHome()
+        }, lp(top = 10))
+        audioHint = label("", 12f, false, Glass.TEXT_3)
+        sender.addView(audioHint, lp(top = 8))
+
         senderSection = sender
         col.addView(sender, lp(top = 22))
 
@@ -358,6 +374,13 @@ class MainActivity : Activity() {
         senderSection?.visibility = if (send) View.VISIBLE else View.GONE
         paintTabs(qualityTabs, quality)
         paintTabs(displayTabs, if (tabletMode) 1 else 0)
+        paintTabs(audioTabs, AudioForwarder.output.ordinal)
+        val now = if (Session.streaming && AudioForwarder.active.isNotEmpty()) "עכשיו: ${AudioForwarder.active}. " else ""
+        audioHint?.text = now + when (AudioForwarder.output) {
+            AudioForwarder.Output.TABLET -> "הצליל יוצא רק מהטאבלט והטלפון שקט (דרך Shizuku)."
+            AudioForwarder.Output.BOTH -> "הצליל יוצא בטאבלט וגם נשאר בטלפון. במצב שיקוף בלבד."
+            AudioForwarder.Output.PHONE -> "הצליל נשאר בטלפון ולא עובר לטאבלט."
+        }
 
         val shz = ShizukuBridge.state
         val (shzColor, shzText, shzAction) = when (shz) {
@@ -412,6 +435,7 @@ class MainActivity : Activity() {
     private fun beginCapture() {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 5)
+        if (needsAudioPermission()) requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 6)
         if (tabletMode) {
             when {
                 !ShizukuBridge.ready -> Session.set(Session.Link.ERROR, "מסך טאבלט דורש Shizuku פעיל — ראה הכרטיס למעלה")
@@ -424,6 +448,18 @@ class MainActivity : Activity() {
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         @Suppress("DEPRECATION")
         startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_CAPTURE)
+    }
+
+    /** Playback capture (used for "both", or "tablet" without Shizuku) needs the runtime audio permission. */
+    private fun needsAudioPermission(): Boolean {
+        val out = AudioForwarder.output
+        val viaCapture = out == AudioForwarder.Output.BOTH || (out == AudioForwarder.Output.TABLET && !ShizukuBridge.ready)
+        return viaCapture && !tabletMode && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 6 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED && Session.streaming) CaptureService.restartAudio()
     }
 
     private fun stopCapture() { startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_STOP)) }
@@ -471,6 +507,9 @@ class MainActivity : Activity() {
         val again = glassButton("חבר מחדש", 18f, 14f).apply { setOnClickListener { reconnect() } }
         val hide = glassButton("הסתר", 18f, 14f).apply { setOnClickListener { hideHud() } }
         val back = glassButton("חזור", 18f, 14f).apply { setOnClickListener { sendKey(KeyEvent.KEYCODE_BACK) } }
+        muteBtn = glassButton(if (AudioSink.muted) "בטל השתקה" else "השתק", 18f, 14f).apply {
+            setOnClickListener { AudioSink.muted = !AudioSink.muted; text = if (AudioSink.muted) "בטל השתקה" else "השתק"; showHud() }
+        }
         val home = glassButton("בית", 18f, 14f).apply { setOnClickListener { sendKey(KeyEvent.KEYCODE_HOME) } }
         fillMode = prefs.getBoolean("fill", false)
         fillBtn = glassButton(if (fillMode) "התאם למסך" else "מלא מסך", 18f, 14f).apply {
@@ -488,6 +527,7 @@ class MainActivity : Activity() {
         val nav = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         nav.addView(back, LinearLayout.LayoutParams(0, -2, 1f))
         nav.addView(home, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(8) })
+        nav.addView(muteBtn, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(8) })
         h.addView(nav, lp(top = 8))
         h.addView(label("הפס הקטן למעלה פותח את הפאנל הזה · חזור/בית פועלים עם Shizuku", 11f, false, Glass.TEXT_3), lp(top = 8))
         hud = h
@@ -572,7 +612,8 @@ class MainActivity : Activity() {
             (d?.decoded ?: 0L) == 0L -> "● ממתין לתמונה מהמכשיר השני…"
             else -> "● מציג · ${videoW}×${videoH}"
         }
-        val touchMode = if (Session.senderShizuku) "מגע מלא" else "הקשות בלבד (אין Shizuku)"
+        val touchMode = (if (Session.senderShizuku) "מגע מלא" else "הקשות בלבד (אין Shizuku)") +
+            " · שמע: " + when { AudioSink.muted -> "מושתק"; AudioSink.playing -> "פעיל (עוצמה בכפתורי הטאבלט)"; else -> "לא מתקבל" }
         hudText?.text = "$state${if (Session.senderVirtual) " · מסך טאבלט" else ""}\n" +
             "מתקבל ${"%.0f".format(fps)}fps · נשלח ${Session.senderFps}fps · כבל ${"%.1f".format(Session.rttMs)}ms · פענוח ${"%.1f".format(d?.lastQueueDelayMs ?: 0.0)}ms · נפלו ${d?.dropped ?: 0}\n$touchMode"
         val h = hud ?: return

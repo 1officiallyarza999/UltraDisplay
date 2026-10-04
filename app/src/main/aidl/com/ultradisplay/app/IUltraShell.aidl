@@ -2,6 +2,7 @@ package com.ultradisplay.app;
 
 import android.view.MotionEvent;
 import android.view.Surface;
+import android.os.ParcelFileDescriptor;
 
 /** Runs inside a Shizuku user-service process with shell (adb) identity. */
 interface IUltraShell {
@@ -14,4 +15,7 @@ interface IUltraShell {
     oneway void injectKey(int keyCode, int displayId) = 4;
     String exec(String command) = 5;
     int uid() = 6;
+    /** Capture the whole audio output (REMOTE_SUBMIX); the phone's own speaker goes silent while active. */
+    ParcelFileDescriptor startAudio(int sampleRate) = 7;
+    void stopAudio() = 8;
 }

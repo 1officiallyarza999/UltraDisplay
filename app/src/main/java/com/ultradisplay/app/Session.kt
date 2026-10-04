@@ -80,6 +80,7 @@ object Session {
         wire = null
         w.close()
         peerMode = null; peerName = ""; lastConfig = null; senderFps = 0
+        AudioSink.stop()
         set(Link.SEARCHING, reason)
         log(reason)
     }
@@ -127,7 +128,8 @@ object Session {
                         videoSink?.invoke(p)
                     }
                     Wire.VIDEO -> videoSink?.invoke(p)
-                    Wire.STREAM_END -> { lastConfig = null; senderFps = 0; log("המכשיר השני עצר את השידור") }
+                    Wire.AUDIO -> if (mode == Mode.RECEIVE) AudioSink.onPacket(p.bytes)
+                    Wire.STREAM_END -> { lastConfig = null; senderFps = 0; AudioSink.stop(); log("המכשיר השני עצר את השידור") }
                 }
             }
         } catch (e: Exception) {

@@ -41,6 +41,10 @@ class CaptureService : Service() {
         @Volatile private var liveCodec: MediaCodec? = null
         @Volatile private var liveConfig: Wire.Packet? = null
         @Volatile var virtualMode = false
+        @Volatile private var instance: CaptureService? = null
+
+        /** Apply a changed audio-output choice to a running stream. */
+        fun restartAudio() { instance?.let { AudioForwarder.start(it, it.projection) } }
 
         /** Receiver asked for a fresh IDR (it opened late or dropped frames): resend config + keyframe. */
         fun requestKeyframe() {
@@ -62,6 +66,7 @@ class CaptureService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(
             NotificationChannel(CHANNEL, "שיתוף מסך", NotificationManager.IMPORTANCE_LOW))
     }
@@ -117,6 +122,7 @@ class CaptureService : Service() {
             running = true; Session.streaming = true
             startLoop(codec, input, cfg, m.widthPixels > m.heightPixels)
             displayManager.registerDisplayListener(rotationListener, Handler(Looper.getMainLooper()))
+            AudioForwarder.start(this, proj)
         } catch (e: Exception) {
             Session.set(Session.Link.ERROR, "שגיאת שידור: ${e.message}"); stopSelf()
         }
@@ -145,6 +151,7 @@ class CaptureService : Service() {
             Session.log("נוצר מסך טאבלט #$displayId · ${cfg.first}×${cfg.second} · ${dpi}dpi")
             startLoop(codec, input, cfg, true)
             thread { ShizukuBridge.launchHome(displayId) }
+            AudioForwarder.start(this, null)
         } catch (e: Exception) {
             Session.set(Session.Link.ERROR, "יצירת מסך טאבלט נכשלה: ${e.message}"); stopSelf()
         }
@@ -280,6 +287,8 @@ class CaptureService : Service() {
     }
 
     override fun onDestroy() {
+        instance = null
+        AudioForwarder.stop()
         running = false
         generation.incrementAndGet()
         Session.streaming = false

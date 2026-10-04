@@ -5,7 +5,7 @@ plugins {
 android {
     namespace = "com.ultradisplay.app"
     compileSdk = 35
-    defaultConfig { applicationId = "com.ultradisplay.app"; minSdk = 26; targetSdk = 35; versionCode = 4; versionName = "0.3.0" }
+    defaultConfig { applicationId = "com.ultradisplay.app"; minSdk = 26; targetSdk = 35; versionCode = 5; versionName = "0.4.0" }
     buildFeatures { aidl = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
