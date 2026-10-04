@@ -56,8 +56,10 @@ class LinkService : Service() {
 
     private val tick = object : Runnable {
         override fun run() {
-            if (Session.wire == null) link.connect()
-            onState()
+            CrashReporter.guard("link tick") {
+                if (Session.wire == null) link.connect()
+                onState()
+            }
             handler.postDelayed(this, 1500)
         }
     }
@@ -84,7 +86,8 @@ class LinkService : Service() {
     }
 
     private fun openApp(): PendingIntent = PendingIntent.getActivity(this, 0,
-        Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        Intent(this, MainActivity::class.java).setAction(if (Session.mode == Session.Mode.SEND) MainActivity.ACTION_AUTO_START else Intent.ACTION_MAIN)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
     private fun foreground() {
@@ -126,12 +129,20 @@ class LinkService : Service() {
             autoStarted = true
             if (prefs.tabletMode && ShizukuBridge.ready && Session.peerW > 0) {
                 Session.log(tr("מתחיל מסך טאבלט אוטומטית", "Starting tablet screen automatically"))
-                startForegroundService(Intent(this, CaptureService::class.java)
-                    .setAction(CaptureService.ACTION_START_TABLET).putExtra(CaptureService.EXTRA_QUALITY, prefs.preset))
+                try {
+                    startForegroundService(Intent(this, CaptureService::class.java)
+                        .setAction(CaptureService.ACTION_START_TABLET).putExtra(CaptureService.EXTRA_QUALITY, prefs.preset))
+                } catch (e: Exception) {
+                    // Android may refuse to start it while the app is in the background: ask the user to tap instead.
+                    Session.log(tr("אנדרואיד חסם התחלה ברקע — הקש על ההתראה", "Android blocked a background start — tap the notification"))
+                    notifyReady(tr("הטאבלט מחובר", "Tablet connected"), tr("הקש כדי להפעיל את מסך הטאבלט", "Tap to start the tablet screen"))
+                }
             } else {
                 // Screen mirroring always needs the system's share-screen approval, so open the app to ask for it.
-                startActivity(Intent(this, MainActivity::class.java)
-                    .setAction(MainActivity.ACTION_AUTO_START).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                try {
+                    startActivity(Intent(this, MainActivity::class.java)
+                        .setAction(MainActivity.ACTION_AUTO_START).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                } catch (_: Exception) {}
                 notifyReady(tr("הטאבלט מחובר", "Tablet connected"), tr("הקש כדי להתחיל לשדר", "Tap to start streaming"))
             }
         }
@@ -139,7 +150,7 @@ class LinkService : Service() {
         // Tablet: tell the user the picture is ready if the viewer is not open.
         if (Session.mode == Session.Mode.RECEIVE && Session.lastConfig != null && !announcedStream && !MainActivity.viewerOpen) {
             announcedStream = true
-            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+            try { startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)) } catch (_: Exception) {}
             notifyReady(tr("הטלפון משדר", "The phone is streaming"), tr("הקש כדי לצפות", "Tap to view"))
         }
         if (Session.lastConfig == null) announcedStream = false
@@ -155,7 +166,7 @@ class LinkService : Service() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         try { unregisterReceiver(receiver) } catch (_: Exception) {}
-        if (Session.streaming) startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_STOP))
+        if (Session.streaming) try { startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_STOP)) } catch (_: Exception) {}
         Session.detach(tr("החיבור נסגר", "Connection closed"))
         link.close()
         instance = null

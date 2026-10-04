@@ -61,7 +61,7 @@ class MainActivity : Activity() {
 
     private val tick = object : Runnable {
         override fun run() {
-            if (onViewer) updateViewer() else { updateHome(); maybeOpenViewer(); maybeAutoStart() }
+            CrashReporter.guard("ui tick") { if (onViewer) updateViewer() else { updateHome(); maybeOpenViewer(); maybeAutoStart() } }
             handler.postDelayed(this, 250)
         }
     }
@@ -138,6 +138,34 @@ class MainActivity : Activity() {
         })
         col.addView(head)
         col.addView(label(tr("המסך של הטלפון על הטאבלט · בכבל אחד", "Your phone's screen on your tablet · one cable"), 14f, false, Glass.TEXT_2), lp(top = 8))
+
+        // A crash from the previous run: show what happened so it can be sent and fixed.
+        CrashReporter.pending(this)?.let { report ->
+            val c = glassCard(24f, 16)
+            (c.background as? GlassDrawable)?.glassTint = Glass.RED_TINT
+            c.addView(label(tr("האפליקציה נסגרה בפעם הקודמת", "The app closed unexpectedly last time"), 16f, true))
+            c.addView(label(tr("לחץ \"העתק\" ושלח לי את הטקסט — ככה אדע בדיוק מה לתקן.", "Tap Copy and send me the text so I know exactly what to fix."), 13f, false, Glass.TEXT_2), lp(top = 6))
+            c.addView(label(report.lines().drop(4).firstOrNull { it.contains("Exception") || it.contains("Error") } ?: report.lines().take(3).joinToString(" "),
+                11.5f, false, Glass.TEXT_2).apply { typeface = Typeface.MONOSPACE; textDirection = View.TEXT_DIRECTION_LTR; maxLines = 4 }, lp(top = 8))
+            val btns = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            btns.addView(glassButton(tr("העתק", "Copy"), 18f, 14f, Glass.ACCENT_TINT).apply {
+                setOnClickListener {
+                    val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("UltraDisplay crash", report))
+                    text = tr("הועתק ✓", "Copied ✓")
+                }
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            btns.addView(glassButton(tr("שתף", "Share"), 18f, 14f).apply {
+                setOnClickListener {
+                    startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, report), null))
+                }
+            }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(8) })
+            btns.addView(glassButton(tr("סגור", "Dismiss"), 18f, 14f).apply {
+                setOnClickListener { CrashReporter.clear(this@MainActivity); showHome() }
+            }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(8) })
+            c.addView(btns, lp(top = 12))
+            col.addView(c, lp(top = 18))
+        }
 
         // Status
         val status = glassCard(28f, 20)

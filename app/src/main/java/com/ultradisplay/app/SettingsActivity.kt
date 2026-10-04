@@ -14,7 +14,7 @@ class SettingsActivity : Activity() {
     private lateinit var prefs: Prefs
     private var shizuku: ShizukuCard? = null
     private val handler = Handler(Looper.getMainLooper())
-    private val tick = object : Runnable { override fun run() { shizuku?.update(); handler.postDelayed(this, 700) } }
+    private val tick = object : Runnable { override fun run() { CrashReporter.guard("settings tick") { shizuku?.update() }; handler.postDelayed(this, 700) } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

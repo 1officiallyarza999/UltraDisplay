@@ -21,7 +21,7 @@ class OnboardingActivity : Activity() {
     private var step = 0
     private var shizuku: ShizukuCard? = null
     private val handler = Handler(Looper.getMainLooper())
-    private val tick = object : Runnable { override fun run() { shizuku?.update(); handler.postDelayed(this, 700) } }
+    private val tick = object : Runnable { override fun run() { CrashReporter.guard("guide tick") { shizuku?.update() }; handler.postDelayed(this, 700) } }
 
     private val sender get() = Session.mode == Session.Mode.SEND
     private val steps get() = if (sender) 4 else 3
