@@ -32,6 +32,14 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      # Keep the same debug signing key between builds (stored in the repo's private Actions cache,
+      # not in the code) so a new APK installs over the previous one instead of being rejected.
+      - name: Restore debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: ultradisplay-debug-keystore-v1
+
       - name: Build APK
         run: |
           set -o pipefail
