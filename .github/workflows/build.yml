@@ -33,7 +33,16 @@ jobs:
           gradle-version: '8.9'
 
       - name: Build APK
-        run: gradle assembleDebug --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleDebug --console=plain 2>&1 | tee build.log
+
+      # Surface compiler errors as annotations so they are readable without downloading logs.
+      - name: Report build errors
+        if: failure()
+        run: |
+          grep -E "^e: |error:|What went wrong|AAPT|Execution failed" build.log | head -40 > errors.txt || true
+          echo "::error title=Build errors::$(sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g' errors.txt)"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
