@@ -1,13 +1,38 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <!-- glow -->
-    <path android:fillColor="#3322D3EE" android:pathData="M54,22a32,32 0 1,1 0,64a32,32 0 1,1 0,-64z"/>
-    <!-- tablet -->
-    <path android:fillColor="#26FFFFFF" android:strokeColor="#E6FFFFFF" android:strokeWidth="2.2"
-        android:pathData="M33,38h42a5,5 0 0 1 5,5v24a5,5 0 0 1 -5,5h-42a5,5 0 0 1 -5,-5v-24a5,5 0 0 1 5,-5z"/>
-    <!-- mirrored phone screen -->
-    <path android:fillColor="#5EE7F7"
-        android:pathData="M50,43h8a2.5,2.5 0 0 1 2.5,2.5v21a2.5,2.5 0 0 1 -2.5,2.5h-8a2.5,2.5 0 0 1 -2.5,-2.5v-21a2.5,2.5 0 0 1 2.5,-2.5z"/>
-    <!-- cable -->
-    <path android:strokeColor="#A78BFA" android:strokeWidth="2.6" android:strokeLineCap="round" android:pathData="M54,72v12"/>
+    <!-- Logo A "Glass Bridge", scaled into the adaptive-icon safe zone -->
+    <group android:pivotX="54" android:pivotY="58" android:scaleX="0.8" android:scaleY="0.8" android:translateY="-4">
+        <!-- light beam from phone into tablet -->
+        <path android:pathData="M44,50 L58,34 L86,34 L86,64 L44,78Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="44" android:startY="0" android:endX="86" android:endY="0">
+                    <item android:offset="0" android:color="#8C5EE7F7"/>
+                    <item android:offset="1" android:color="#00A78BFA"/>
+                </gradient>
+            </aapt:attr>
+        </path>
+        <!-- glass tablet -->
+        <path android:pathData="M45,30h38a7,7 0 0 1 7,7v24a7,7 0 0 1 -7,7h-38a7,7 0 0 1 -7,-7v-24a7,7 0 0 1 7,-7z"
+            android:strokeColor="#D9FFFFFF" android:strokeWidth="2">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="0" android:startY="30" android:endX="0" android:endY="68">
+                    <item android:offset="0" android:color="#42FFFFFF"/>
+                    <item android:offset="1" android:color="#0FFFFFFF"/>
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:pathData="M44,33.5h40" android:strokeColor="#80FFFFFF" android:strokeWidth="1.4" android:strokeLineCap="round"/>
+        <!-- glowing phone -->
+        <path android:pathData="M26.5,44h11a6.5,6.5 0 0 1 6.5,6.5v29a6.5,6.5 0 0 1 -6.5,6.5h-11a6.5,6.5 0 0 1 -6.5,-6.5v-29a6.5,6.5 0 0 1 6.5,-6.5z"
+            android:strokeColor="#B3FFFFFF" android:strokeWidth="1.3">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="20" android:startY="44" android:endX="44" android:endY="86">
+                    <item android:offset="0" android:color="#FF7CF3FF"/>
+                    <item android:offset="1" android:color="#FF8B5CF6"/>
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:pathData="M24.5,48.5h15" android:strokeColor="#BFFFFFFF" android:strokeWidth="1.6" android:strokeLineCap="round"/>
+    </group>
 </vector>
