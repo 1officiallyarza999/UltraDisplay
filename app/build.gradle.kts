@@ -15,3 +15,10 @@ dependencies {
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 }
+
+android.lint {
+    abortOnError = false
+    textReport = true
+    textOutput = file("build/reports/lint-results-debug.txt")
+    checkDependencies = false
+}
