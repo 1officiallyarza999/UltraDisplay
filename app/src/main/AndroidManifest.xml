@@ -9,6 +9,8 @@
     <!-- Foreground service for the tablet-screen mode (no MediaProjection involved). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
     <queries>
         <package android:name="moe.shizuku.privileged.api"/>
@@ -52,6 +54,20 @@
             android:resizeableActivity="true"
             android:label="UltraDisplay"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density"/>
+
+        <activity android:name=".SettingsActivity" android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"/>
+        <activity android:name=".OnboardingActivity" android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"/>
+
+        <!-- Owns the USB connection in the background so it survives closing the app. -->
+        <service android:name=".LinkService" android:foregroundServiceType="connectedDevice" android:exported="false"/>
+        <receiver android:name=".BootReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
+        </receiver>
 
         <service android:name=".CaptureService" android:foregroundServiceType="mediaProjection|connectedDevice" android:exported="false"/>
 

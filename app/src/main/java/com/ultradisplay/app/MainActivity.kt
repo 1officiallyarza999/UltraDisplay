@@ -2,7 +2,8 @@ package com.ultradisplay.app
 
 import android.Manifest
 import android.app.Activity
-import android.content.*
+import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
@@ -11,25 +12,26 @@ import android.graphics.drawable.GradientDrawable
 import android.hardware.usb.UsbManager
 import android.media.projection.MediaProjectionManager
 import android.os.*
-import android.provider.Settings
 import android.view.*
 import android.widget.*
 import java.nio.ByteBuffer
+import kotlin.math.max
 import kotlin.math.min
 
 class MainActivity : Activity() {
-    companion object { const val REQUEST_CAPTURE = 91 }
+    companion object {
+        const val REQUEST_CAPTURE = 91
+        const val ACTION_AUTO_START = "ultra.AUTO_START"
+        @Volatile var viewerOpen = false; private set
+    }
 
-    private lateinit var link: UsbLink
-    private lateinit var prefs: SharedPreferences
+    private lateinit var prefs: Prefs
     private val handler = Handler(Looper.getMainLooper())
     private var onViewer = false
     private var dismissedConfig: Wire.Packet? = null
-    private var lastPoll = 0L
-    private var quality = 0
-    private var tabletMode = false
+    private var pendingAutoStart = false
 
-    // Home screen views
+    // Home
     private var dotView: View? = null
     private var statusTitle: TextView? = null
     private var statusDetail: TextView? = null
@@ -37,85 +39,51 @@ class MainActivity : Activity() {
     private var recvGlass: GlassDrawable? = null
     private var sendCheck: TextView? = null
     private var recvCheck: TextView? = null
-    private var qualitySection: View? = null
-    private val qualityTabs = mutableListOf<Pair<TextView, GlassDrawable>>()
-    private var primaryBtn: TextView? = null
-    private var touchBtn: TextView? = null
     private var senderSection: View? = null
     private val displayTabs = mutableListOf<Pair<TextView, GlassDrawable>>()
-    private val audioTabs = mutableListOf<Pair<TextView, GlassDrawable>>()
-    private var audioHint: TextView? = null
-    private var muteBtn: TextView? = null
-    private var shizukuDot: View? = null
-    private var shizukuTitle: TextView? = null
-    private var shizukuText: TextView? = null
-    private var shizukuBtn: TextView? = null
+    private var shizuku: ShizukuCard? = null
+    private var primaryBtn: TextView? = null
+    private var touchBtn: TextView? = null
     private var helpCard: View? = null
     private var logView: TextView? = null
 
-    // Viewer views
+    // Viewer
     private var decoder: TabletDecoder? = null
     private var surfaceView: SurfaceView? = null
     private var viewerRoot: FrameLayout? = null
     private var hud: View? = null
     private var hudText: TextView? = null
+    private var handle: View? = null
     private var hudHideAt = 0L
     private var videoW = 0; private var videoH = 0
-    private var fillMode = false
-    private var fillBtn: TextView? = null
     private var fpsMark = 0L; private var fpsFrames = 0L; private var fps = 0.0
-    private var handle: View? = null
+    private val adaptive = AdaptiveQuality()
 
     private val tick = object : Runnable {
         override fun run() {
-            val now = SystemClock.uptimeMillis()
-            if (Session.wire == null && now - lastPoll > 1500) { lastPoll = now; link.connect() }
-            if (onViewer) updateViewer() else { updateHome(); maybeOpenViewer() }
+            if (onViewer) updateViewer() else { updateHome(); maybeOpenViewer(); maybeAutoStart() }
             handler.postDelayed(this, 250)
-        }
-    }
-
-    private val usbReceiver = object : BroadcastReceiver() {
-        override fun onReceive(ctx: Context, intent: Intent) {
-            when (intent.action) {
-                UsbLink.PERMISSION -> link.onPermissionResult(intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false))
-                UsbManager.ACTION_USB_DEVICE_ATTACHED -> { Session.log("זוהה התקן USB"); handler.postDelayed({ link.connect() }, 400) }
-                UsbManager.ACTION_USB_DEVICE_DETACHED, UsbManager.ACTION_USB_ACCESSORY_DETACHED ->
-                    if (Session.wire != null) Session.detach("הכבל נותק")
-            }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = getSharedPreferences("ultra", MODE_PRIVATE)
-        val bigScreen = resources.configuration.smallestScreenWidthDp >= 600
-        Session.mode = when (prefs.getString("mode", null)) {
-            "SEND" -> Session.Mode.SEND; "RECEIVE" -> Session.Mode.RECEIVE
-            else -> if (bigScreen) Session.Mode.RECEIVE else Session.Mode.SEND
-        }
-        quality = prefs.getInt("preset", 0)
-        tabletMode = prefs.getBoolean("tablet", false)
-        AudioForwarder.output = AudioForwarder.Output.values()[prefs.getInt("audio", 0).coerceIn(0, 2)]
-        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
+        prefs = Prefs.of(this)
+        Lang.load(this)
         Session.init(this); TouchInjector.init(this); ShizukuBridge.init(this)
-        link = UsbLink(applicationContext)
-
-        window.statusBarColor = Color.TRANSPARENT
-        window.navigationBarColor = Color.TRANSPARENT
-        @Suppress("DEPRECATION")
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-
-        val filter = IntentFilter().apply {
-            addAction(UsbLink.PERMISSION)
-            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED); addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
-            addAction(UsbManager.ACTION_USB_ACCESSORY_DETACHED)
+        Session.mode = when (prefs.mode) {
+            "SEND" -> Session.Mode.SEND; "RECEIVE" -> Session.Mode.RECEIVE
+            else -> if (resources.configuration.smallestScreenWidthDp >= 600) Session.Mode.RECEIVE else Session.Mode.SEND
         }
-        if (Build.VERSION.SDK_INT >= 33) registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        else registerReceiver(usbReceiver, filter)
+        AudioForwarder.output = AudioForwarder.Output.values()[prefs.audio.coerceIn(0, 2)]
+        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
 
-        Session.log("UltraDisplay נפתח · ${Build.MODEL} · Android ${Build.VERSION.RELEASE}")
-        handleUsbIntent(intent)
+        if (!prefs.onboarded) {
+            startActivity(Intent(this, OnboardingActivity::class.java))
+            finish(); return
+        }
+        LinkService.start(this)
+        handleIntent(intent)
         showHome()
         handler.post(tick)
     }
@@ -123,18 +91,27 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleUsbIntent(intent)
+        handleIntent(intent)
     }
 
-    /** USB_ACCESSORY_ATTACHED is only delivered to activities, never as a broadcast. */
-    private fun handleUsbIntent(intent: Intent?) {
+    /** USB attach intents (from the manifest filters) and the service's auto-start request. */
+    private fun handleIntent(intent: Intent?) {
         when (intent?.action) {
-            UsbManager.ACTION_USB_ACCESSORY_ATTACHED -> { Session.log("המכשיר השני פתח חיבור UltraDisplay"); handler.postDelayed({ link.connect() }, 200) }
-            UsbManager.ACTION_USB_DEVICE_ATTACHED -> { Session.log("זוהה מכשיר במצב AOA"); handler.postDelayed({ link.connect() }, 200) }
+            UsbManager.ACTION_USB_ACCESSORY_ATTACHED, UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                Session.log(tr("זוהה חיבור USB", "USB connection detected"))
+                handler.postDelayed({ LinkService.connectNow(this) }, 250)
+            }
+            ACTION_AUTO_START -> pendingAutoStart = true
         }
     }
 
-    override fun onResume() { super.onResume(); ShizukuBridge.refresh(); link.connect() }
+    override fun onResume() {
+        super.onResume()
+        Lang.load(this)
+        ShizukuBridge.refresh()
+        LinkService.connectNow(this)
+        if (!onViewer && ::prefs.isInitialized && prefs.onboarded) showHome()
+    }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
@@ -144,184 +121,101 @@ class MainActivity : Activity() {
     // ───────────────────────────── Home ─────────────────────────────
 
     private fun showHome() {
-        onViewer = false
+        onViewer = false; viewerOpen = false
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         showSystemBars()
-        qualityTabs.clear(); displayTabs.clear(); audioTabs.clear()
+        displayTabs.clear()
+        val (root, col) = glassScreen()
 
-        val root = FrameLayout(this)
-        root.layoutDirection = View.LAYOUT_DIRECTION_RTL
-        root.addView(LiquidBackground(this), FrameLayout.LayoutParams(-1, -1))
-
-        val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false; clipToPadding = false; overScrollMode = View.OVER_SCROLL_NEVER }
-        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val width = min(resources.displayMetrics.widthPixels, dpi(600))
-        scroll.addView(col, FrameLayout.LayoutParams(width, -2, Gravity.CENTER_HORIZONTAL))
-        root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
-        root.setOnApplyWindowInsetsListener { _, insets ->
-            @Suppress("DEPRECATION")
-            col.setPadding(dpi(18), insets.systemWindowInsetTop + dpi(18), dpi(18), insets.systemWindowInsetBottom + dpi(28))
-            insets
-        }
-
-        // Header
-        col.addView(label("UltraDisplay", 32f, true).apply { letterSpacing = -0.02f })
-        col.addView(label("המסך של הטלפון על הטאבלט · בכבל אחד", 14f, false, Glass.TEXT_2), lp(top = 6))
+        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        head.addView(ImageView(this).apply { setImageResource(R.mipmap.ic_launcher) }, LinearLayout.LayoutParams(dpi(44), dpi(44)))
+        head.addView(label("UltraDisplay", 30f, true).apply { letterSpacing = -0.02f },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(12) })
+        head.addView(glassButton("⚙", 18f, 18f).apply {
+            setPadding(dpi(14), dpi(10), dpi(14), dpi(10))
+            contentDescription = tr("הגדרות", "Settings")
+            setOnClickListener { startActivity(Intent(this@MainActivity, SettingsActivity::class.java)) }
+        })
+        col.addView(head)
+        col.addView(label(tr("המסך של הטלפון על הטאבלט · בכבל אחד", "Your phone's screen on your tablet · one cable"), 14f, false, Glass.TEXT_2), lp(top = 8))
 
         // Status
         val status = glassCard(28f, 20)
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        dotView = dot(Glass.GREY, 12)
-        row.addView(dotView)
+        dotView = dot(Glass.GREY, 12); row.addView(dotView)
         statusTitle = label("", 21f, true)
         row.addView(statusTitle, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(12) })
         status.addView(row)
         statusDetail = label("", 14f, false, Glass.TEXT_2)
         status.addView(statusDetail, lp(top = 10))
-        col.addView(status, lp(top = 22))
+        col.addView(status, lp(top = 20))
 
         // Role
-        col.addView(sectionLabel("התפקיד של המכשיר הזה"), lp(top = 26))
+        col.addView(sectionLabel(tr("התפקיד של המכשיר הזה", "This device is the")), lp(top = 24))
         val roles = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val (sendCard, sg, sc) = roleCard("משדר", "המסך שלו יוצג במכשיר השני")
-        val (recvCard, rg, rc) = roleCard("מציג", "יציג את המסך של המכשיר השני")
-        sendGlass = sg; recvGlass = rg; sendCheck = sc; recvCheck = rc
-        sendCard.setOnClickListener { setMode(Session.Mode.SEND) }
-        recvCard.setOnClickListener { setMode(Session.Mode.RECEIVE) }
-        roles.addView(sendCard, LinearLayout.LayoutParams(0, -2, 1f))
-        roles.addView(recvCard, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(12) })
+        val s = roleCard(tr("משדר", "Sender"), tr("המסך שלו יוצג במכשיר השני", "Its screen shows on the other device"))
+        val r = roleCard(tr("מציג", "Display"), tr("יציג את המסך של המכשיר השני", "Shows the other device's screen"))
+        sendGlass = s.second; sendCheck = s.third; recvGlass = r.second; recvCheck = r.third
+        s.first.setOnClickListener { setMode(Session.Mode.SEND) }
+        r.first.setOnClickListener { setMode(Session.Mode.RECEIVE) }
+        roles.addView(s.first, LinearLayout.LayoutParams(0, -2, 1f))
+        roles.addView(r.first, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(12) })
         col.addView(roles, lp(top = 10))
 
-        // Sender-only settings
+        // Sender: display type + Shizuku (only when not ready)
         val sender = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-
-        sender.addView(sectionLabel("סוג תצוגה"))
-        sender.addView(segmented(listOf("שיקוף מסך", "מסך טאבלט"), displayTabs) { i ->
-            tabletMode = i == 1; prefs.edit().putBoolean("tablet", tabletMode).apply(); updateHome()
+        sender.addView(sectionLabel(tr("סוג תצוגה", "Display type")))
+        sender.addView(segmented(listOf(tr("שיקוף מסך", "Mirror"), tr("מסך טאבלט", "Tablet screen")), displayTabs) { i ->
+            prefs.tabletMode = i == 1; updateHome()
         }, lp(top = 10))
-        sender.addView(label("שיקוף: מה שעל הטלפון מופיע בטאבלט — הכי טוב למשחקים.\nמסך טאבלט: מסך נפרד במידות הטאבלט, האפליקציות רצות על הטלפון ונפרסות לכל הטאבלט. הטלפון נשאר חופשי.", 12f, false, Glass.TEXT_3), lp(top = 8))
-
-        // Shizuku status
-        val shz = glassCard(24f, 16)
-        val shzRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        shizukuDot = dot(Glass.GREY, 10)
-        shzRow.addView(shizukuDot)
-        shizukuTitle = label("Shizuku", 16f, true)
-        shzRow.addView(shizukuTitle, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(10) })
-        shz.addView(shzRow)
-        shizukuText = label("", 13f, false, Glass.TEXT_2)
-        shz.addView(shizukuText, lp(top = 8))
-        shizukuBtn = glassButton("", 18f, 14f, Glass.ACCENT_TINT).apply { setOnClickListener { onShizukuAction() } }
-        shz.addView(shizukuBtn, lp(top = 12))
-        sender.addView(shz, lp(top = 16))
-
-        sender.addView(sectionLabel("איכות שידור"), lp(top = 22))
-        sender.addView(segmented(CaptureService.PRESETS.map { it.label }, qualityTabs) { i ->
-            quality = i; prefs.edit().putInt("preset", i).apply(); updateHome()
-        }, lp(top = 10))
-        sender.addView(label("משחק = 1280 · 60fps · השהיה הכי נמוכה (מומלץ ל-COD).  אולטרה = 1920 · 60fps · הכי חד. אם המכשיר לא עומד בזה, האיכות יורדת אוטומטית.", 12f, false, Glass.TEXT_3), lp(top = 8))
-        sender.addView(sectionLabel("פלט שמע"), lp(top = 22))
-        sender.addView(segmented(listOf("טאבלט", "שניהם", "טלפון"), audioTabs) { i ->
-            AudioForwarder.output = AudioForwarder.Output.values()[i]
-            prefs.edit().putInt("audio", i).apply()
-            if (needsAudioPermission()) requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 6)
-            else if (Session.streaming) CaptureService.restartAudio()
-            updateHome()
-        }, lp(top = 10))
-        audioHint = label("", 12f, false, Glass.TEXT_3)
-        sender.addView(audioHint, lp(top = 8))
-
+        sender.addView(label(tr("שיקוף: מה שעל הטלפון מופיע בטאבלט — הכי טוב למשחקים. מסך טאבלט: מסך נפרד במידות הטאבלט שרץ על הטלפון.",
+            "Mirror: what's on the phone appears on the tablet — best for games. Tablet screen: a separate tablet-sized screen running on the phone."),
+            12f, false, Glass.TEXT_3), lp(top = 8))
+        shizuku = ShizukuCard(this).also { sender.addView(it.view, lp(top = 16)) }
         senderSection = sender
         col.addView(sender, lp(top = 22))
 
-        // Primary action
-        primaryBtn = glassButton("", 30f, 19f, Glass.ACCENT_TINT).apply {
-            minHeight = dpi(64)
-            setOnClickListener { onPrimary() }
-        }
+        primaryBtn = glassButton("", 30f, 19f, Glass.ACCENT_TINT).apply { minHeight = dpi(64); setOnClickListener { onPrimary() } }
         col.addView(primaryBtn, lp(top = 24))
 
-        // Secondary actions
         val secondary = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val reconnect = glassButton("חבר מחדש", 22f, 15f).apply { setOnClickListener { reconnect() } }
-        touchBtn = glassButton("", 22f, 15f).apply { setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } }
-        secondary.addView(reconnect, LinearLayout.LayoutParams(0, -2, 1f))
+        secondary.addView(glassButton(tr("חבר מחדש", "Reconnect"), 22f, 15f).apply { setOnClickListener { reconnect() } }, LinearLayout.LayoutParams(0, -2, 1f))
+        touchBtn = glassButton("", 22f, 15f).apply {
+            setOnClickListener { startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        }
         secondary.addView(touchBtn, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(12) })
         col.addView(secondary, lp(top = 12))
 
-        // Setup help (shown until connected)
+        // Help until connected
         val help = glassCard(26f, 20)
-        help.addView(label("איך מתחברים", 17f, true))
+        help.addView(label(tr("לא מתחבר?", "Not connecting?"), 17f, true))
         listOf(
-            "פתח את UltraDisplay בשני המכשירים.",
-            "בחר \"משדר\" בטלפון ו\"מציג\" בטאבלט.",
-            "חבר כבל USB‑C שתומך בהעברת נתונים (לא כבל טעינה בלבד).",
-            "אשר כל חלון \"לאפשר גישה ל-USB\" שמופיע — בשני המכשירים.",
-            "לא מתחבר תוך כמה שניות? משוך את שורת ההתראות, לחץ על התראת ה-USB ובחר \"העברת קבצים\". אם יש \"USB נשלט על ידי\" — החלף את הבחירה ונסה שוב."
-        ).forEachIndexed { i, s ->
+            tr("ודא ש-UltraDisplay פתוח בשני המכשירים ושאחד \"משדר\" והשני \"מציג\".", "Make sure UltraDisplay is open on both devices, one as Sender and one as Display."),
+            tr("השתמש בכבל USB‑C שתומך בנתונים, ואשר כל בקשת גישה ל-USB.", "Use a USB‑C cable that supports data and allow every USB access request."),
+            tr("משוך את שורת ההתראות, הקש על התראת ה-USB ובחר \"העברת קבצים\".", "Pull down notifications, tap the USB notification and choose \"File transfer\".")
+        ).forEachIndexed { i, t ->
             val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             line.addView(label("${i + 1}", 14f, true, Glass.ACCENT), LinearLayout.LayoutParams(dpi(22), -2))
-            line.addView(label(s, 14f, false, Glass.TEXT_2), LinearLayout.LayoutParams(0, -2, 1f))
+            line.addView(label(t, 14f, false, Glass.TEXT_2), LinearLayout.LayoutParams(0, -2, 1f))
             help.addView(line, lp(top = 10))
         }
         helpCard = help
-        col.addView(help, lp(top = 24))
+        col.addView(help, lp(top = 22))
 
         // Diagnostics
         val diag = glassCard(22f, 16)
-        diag.addView(label("פרטי חיבור", 15f, true))
-        diag.addView(label("אם משהו לא עובד — צלם את המסך הזה ושלח לי", 12f, false, Glass.TEXT_3), lp(top = 4))
-        logView = label("", 11.5f, false, Glass.TEXT_2).apply {
-            typeface = Typeface.MONOSPACE
-            textDirection = View.TEXT_DIRECTION_ANY_RTL
-        }
+        diag.addView(label(tr("פרטי חיבור", "Connection details"), 15f, true))
+        diag.addView(label(tr("אם משהו לא עובד — צלם את זה ושלח לי", "If something isn't working, send a screenshot of this"), 12f, false, Glass.TEXT_3), lp(top = 4))
+        logView = label("", 11.5f, false, Glass.TEXT_2).apply { typeface = Typeface.MONOSPACE; textDirection = View.TEXT_DIRECTION_ANY_RTL }
         diag.addView(logView, lp(top = 10))
         col.addView(diag, lp(top = 16))
-
-        col.addView(label("UltraDisplay v${BuildConfig.VERSION_NAME}", 11f, false, Glass.TEXT_3).apply { textAlignment = View.TEXT_ALIGNMENT_CENTER }, lp(top = 18))
 
         setContentView(root)
         updateHome()
     }
 
-    private fun sectionLabel(text: String) = label(text, 13f, true, Glass.TEXT_3).apply { letterSpacing = 0.04f }
-
-    private fun segmented(items: List<String>, into: MutableList<Pair<TextView, GlassDrawable>>, onPick: (Int) -> Unit): View {
-        val seg = glassCard(22f, 5).apply { orientation = LinearLayout.HORIZONTAL }
-        items.forEachIndexed { i, text ->
-            val g = GlassDrawable(this, dp(18f))
-            val tab = label(text, 15f, true).apply {
-                gravity = Gravity.CENTER; textAlignment = View.TEXT_ALIGNMENT_CENTER
-                setPadding(0, dpi(12), 0, dpi(12)); isClickable = true
-                setOnClickListener { onPick(i) }
-                pressable()
-            }
-            into += tab to g
-            seg.addView(tab, LinearLayout.LayoutParams(0, -2, 1f).apply { if (i > 0) marginStart = dpi(4) })
-        }
-        return seg
-    }
-
-    private fun paintTabs(tabs: List<Pair<TextView, GlassDrawable>>, selected: Int) {
-        tabs.forEachIndexed { i, (tab, g) ->
-            tab.background = if (i == selected) g.also { it.glassTint = Glass.ACCENT_TINT } else null
-            tab.setTextColor(if (i == selected) Glass.TEXT else Glass.TEXT_2)
-        }
-    }
-
-    private fun onShizukuAction() {
-        when (ShizukuBridge.state) {
-            ShizukuBridge.State.NOT_INSTALLED, ShizukuBridge.State.NOT_RUNNING -> ShizukuBridge.openShizuku(this)
-            ShizukuBridge.State.NO_PERMISSION -> ShizukuBridge.requestPermission()
-            else -> ShizukuBridge.refresh()
-        }
-    }
-
-    private data class RoleViews(val card: View, val glass: GlassDrawable, val check: TextView)
-
-    private fun roleCard(title: String, sub: String): RoleViews {
-        val card = glassCard(24f, 16).apply { isClickable = true; pressable(); minimumHeight = dpi(118) }
-        val glass = card.background as GlassDrawable
+    private fun roleCard(title: String, sub: String): Triple<View, GlassDrawable, TextView> {
+        val card = glassCard(24f, 16).apply { isClickable = true; pressable(); minimumHeight = dpi(112) }
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         top.addView(label(title, 19f, true), LinearLayout.LayoutParams(0, -2, 1f))
         val check = label("✓", 13f, true, Color.BLACK).apply {
@@ -331,16 +225,12 @@ class MainActivity : Activity() {
         top.addView(check, LinearLayout.LayoutParams(dpi(22), dpi(22)))
         card.addView(top)
         card.addView(label(sub, 13f, false, Glass.TEXT_2), lp(top = 8))
-        return RoleViews(card, glass, check)
+        return Triple(card, card.background as GlassDrawable, check)
     }
-
-    private fun lp(top: Int = 0) = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dpi(top) }
 
     private fun setMode(m: Session.Mode) {
         if (Session.mode == m) return
-        Session.mode = m
-        prefs.edit().putString("mode", m.name).apply()
-        Session.log("תפקיד: ${if (m == Session.Mode.SEND) "משדר" else "מציג"}")
+        Session.mode = m; prefs.mode = m.name
         if (m == Session.Mode.RECEIVE && Session.streaming) stopCapture()
         Session.sendHello()
         updateHome()
@@ -350,19 +240,20 @@ class MainActivity : Activity() {
         val connected = Session.wire != null
         val conflict = connected && Session.peerMode != null && Session.peerMode == Session.mode
         val (color, title) = when {
-            conflict -> Glass.AMBER to "שני המכשירים באותו תפקיד"
-            Session.streaming -> Glass.GREEN to "משדר עכשיו"
-            connected -> Glass.GREEN to if (Session.peerName.isNotEmpty()) "מחובר ל-${Session.peerName}" else "מחובר"
-            Session.link == Session.Link.CONNECTING -> Glass.AMBER to "מתחבר…"
-            Session.link == Session.Link.ERROR -> Glass.RED to "החיבור נכשל"
-            else -> Glass.GREY to "ממתין לכבל"
+            conflict -> Glass.AMBER to tr("שני המכשירים באותו תפקיד", "Both devices have the same role")
+            Session.streaming -> Glass.GREEN to tr("משדר עכשיו", "Streaming now")
+            connected -> Glass.GREEN to (if (Session.peerName.isNotEmpty()) tr("מחובר ל-", "Connected to ") + Session.peerName else tr("מחובר", "Connected"))
+            Session.link == Session.Link.CONNECTING -> Glass.AMBER to tr("מתחבר…", "Connecting…")
+            Session.link == Session.Link.ERROR -> Glass.RED to tr("החיבור נכשל", "Connection failed")
+            else -> Glass.GREY to tr("ממתין לכבל", "Waiting for cable")
         }
         (dotView?.background as? GradientDrawable)?.setColor(color)
         statusTitle?.text = title
         statusDetail?.text = when {
-            conflict -> if (Session.mode == Session.Mode.SEND) "גם המכשיר השני מוגדר \"משדר\". בחר \"מציג\" באחד מהם." else "גם המכשיר השני מוגדר \"מציג\". בחר \"משדר\" בטלפון."
-            Session.streaming -> "${Session.streamInfo} · השהיית כבל ${"%.1f".format(Session.rttMs)}ms"
-            connected -> "${Session.usbRole} · השהיית כבל ${"%.1f".format(Session.rttMs)}ms"
+            conflict -> tr("בחר \"מציג\" בטאבלט ו\"משדר\" בטלפון.", "Choose Display on the tablet and Sender on the phone.")
+            Session.streaming -> "${Session.streamInfo} · ${tr("כבל", "cable")} ${"%.1f".format(Session.rttMs)}ms" +
+                if (Session.adaptivePercent < 100) " · ${tr("איכות", "quality")} ${Session.adaptivePercent}%" else ""
+            connected -> "${Session.usbRole} · ${tr("כבל", "cable")} ${"%.1f".format(Session.rttMs)}ms"
             else -> Session.status
         }
 
@@ -372,44 +263,24 @@ class MainActivity : Activity() {
         sendCheck?.visibility = if (send) View.VISIBLE else View.INVISIBLE
         recvCheck?.visibility = if (!send) View.VISIBLE else View.INVISIBLE
         senderSection?.visibility = if (send) View.VISIBLE else View.GONE
-        paintTabs(qualityTabs, quality)
-        paintTabs(displayTabs, if (tabletMode) 1 else 0)
-        paintTabs(audioTabs, AudioForwarder.output.ordinal)
-        val now = if (Session.streaming && AudioForwarder.active.isNotEmpty()) "עכשיו: ${AudioForwarder.active}. " else ""
-        audioHint?.text = now + when (AudioForwarder.output) {
-            AudioForwarder.Output.TABLET -> "הצליל יוצא רק מהטאבלט והטלפון שקט (דרך Shizuku)."
-            AudioForwarder.Output.BOTH -> "הצליל יוצא בטאבלט וגם נשאר בטלפון. במצב שיקוף בלבד."
-            AudioForwarder.Output.PHONE -> "הצליל נשאר בטלפון ולא עובר לטאבלט."
-        }
-
-        val shz = ShizukuBridge.state
-        val (shzColor, shzText, shzAction) = when (shz) {
-            ShizukuBridge.State.READY -> Triple(Glass.GREEN, "פעיל ✓ מגע מלא בזמן אמת (כמה אצבעות, החזקה, גרירה) ומסך טאבלט זמינים.", "")
-            ShizukuBridge.State.CONNECTING -> Triple(Glass.AMBER, "מתחבר ל-Shizuku…", "")
-            ShizukuBridge.State.NO_PERMISSION -> Triple(Glass.AMBER, "Shizuku פועל. צריך לאשר ל-UltraDisplay גישה.", "אשר גישה")
-            ShizukuBridge.State.NOT_RUNNING -> Triple(Glass.AMBER, "Shizuku מותקן אבל לא מופעל. פתח אותו ולחץ \"התחל\" דרך ניפוי באגים אלחוטי.", "פתח את Shizuku")
-            ShizukuBridge.State.NOT_INSTALLED -> Triple(Glass.GREY, "נדרש למגע מלא במשחקים ולמסך טאבלט. בלעדיו יש רק הקשות פשוטות.", "התקן Shizuku")
-            ShizukuBridge.State.ERROR -> Triple(Glass.RED, ShizukuBridge.lastError.ifBlank { "שגיאה" }, "נסה שוב")
-        }
-        (shizukuDot?.background as? GradientDrawable)?.setColor(shzColor)
-        shizukuText?.text = shzText
-        shizukuBtn?.text = shzAction
-        shizukuBtn?.visibility = if (shzAction.isEmpty()) View.GONE else View.VISIBLE
+        paintTabs(displayTabs, if (prefs.tabletMode) 1 else 0)
+        shizuku?.update()
+        shizuku?.view?.visibility = if (ShizukuBridge.ready) View.GONE else View.VISIBLE
 
         primaryBtn?.let { b ->
             val (text, tint, enabled) = when {
-                send && Session.streaming -> Triple("עצור שידור", Glass.RED_TINT, true)
-                send && connected && tabletMode -> Triple("הפעל מסך טאבלט", Glass.ACCENT_TINT, !conflict && ShizukuBridge.ready)
-                send && connected -> Triple("התחל שידור", Glass.ACCENT_TINT, !conflict)
-                !send && connected -> Triple(if (Session.lastConfig != null) "פתח תצוגה" else "ממתין שהטלפון יתחיל לשדר", Glass.ACCENT_TINT, true)
-                else -> Triple("ממתין לחיבור…", 0, false)
+                send && Session.streaming -> Triple(tr("עצור שידור", "Stop streaming"), Glass.RED_TINT, true)
+                send && connected && prefs.tabletMode -> Triple(tr("הפעל מסך טאבלט", "Start tablet screen"), Glass.ACCENT_TINT, !conflict && ShizukuBridge.ready)
+                send && connected -> Triple(tr("התחל שידור", "Start streaming"), Glass.ACCENT_TINT, !conflict)
+                !send && connected -> Triple(if (Session.lastConfig != null) tr("פתח תצוגה", "Open viewer") else tr("ממתין שהטלפון יתחיל לשדר", "Waiting for the phone to stream"), Glass.ACCENT_TINT, true)
+                else -> Triple(tr("ממתין לחיבור…", "Waiting for connection…"), 0, false)
             }
             b.text = text
             (b.background as? GlassDrawable)?.glassTint = tint
             b.alpha = if (enabled) 1f else 0.55f
         }
         touchBtn?.visibility = if (send && !ShizukuBridge.ready) View.VISIBLE else View.GONE
-        touchBtn?.text = if (RemoteTouchService.isEnabled(this)) "שליטה במגע ✓" else "הפעל שליטה במגע"
+        touchBtn?.text = if (RemoteTouchService.isEnabled(this)) tr("הקשות פשוטות ✓", "Simple taps ✓") else tr("הפעל הקשות פשוטות", "Enable simple taps")
         helpCard?.visibility = if (connected) View.GONE else View.VISIBLE
         logView?.text = Session.logText(12)
     }
@@ -420,28 +291,34 @@ class MainActivity : Activity() {
             send && Session.streaming -> stopCapture()
             send && Session.wire != null -> beginCapture()
             !send && Session.wire != null -> { dismissedConfig = null; showViewer() }
-            else -> { link.reset(); link.connect() }
+            else -> { LinkService.reset(); LinkService.connectNow(this) }
         }
     }
 
     private fun reconnect() {
-        Session.log("חיבור מחדש ביוזמת המשתמש")
         if (Session.streaming) stopCapture()
-        Session.detach("מתחבר מחדש…")
-        Session.set(Session.Link.SEARCHING, "מחפש את המכשיר השני…")
-        link.reset(); link.connect()
+        Session.detach(tr("מתחבר מחדש…", "Reconnecting…"))
+        LinkService.reset(); LinkService.connectNow(this)
+    }
+
+    /** The background service asked the phone to start; mirroring still needs the user's approval in the system dialog. */
+    private fun maybeAutoStart() {
+        if (!pendingAutoStart) return
+        if (Session.mode != Session.Mode.SEND || Session.streaming || Session.wire == null) { pendingAutoStart = false; return }
+        pendingAutoStart = false
+        beginCapture()
     }
 
     private fun beginCapture() {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 5)
         if (needsAudioPermission()) requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 6)
-        if (tabletMode) {
+        if (prefs.tabletMode) {
             when {
-                !ShizukuBridge.ready -> Session.set(Session.Link.ERROR, "מסך טאבלט דורש Shizuku פעיל — ראה הכרטיס למעלה")
-                Session.peerW <= 0 -> Session.set(Session.Link.ERROR, "הטאבלט לא שלח את מידות המסך — עדכן את UltraDisplay גם בו")
+                !ShizukuBridge.ready -> Session.set(Session.Link.ERROR, tr("מסך טאבלט דורש Shizuku פעיל", "Tablet screen needs Shizuku running"))
+                Session.peerW <= 0 -> Session.set(Session.Link.ERROR, tr("עדכן את UltraDisplay גם בטאבלט", "Update UltraDisplay on the tablet too"))
                 else -> startForegroundService(Intent(this, CaptureService::class.java)
-                    .setAction(CaptureService.ACTION_START_TABLET).putExtra(CaptureService.EXTRA_QUALITY, quality))
+                    .setAction(CaptureService.ACTION_START_TABLET).putExtra(CaptureService.EXTRA_QUALITY, prefs.preset))
             }
             return
         }
@@ -450,11 +327,10 @@ class MainActivity : Activity() {
         startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_CAPTURE)
     }
 
-    /** Playback capture (used for "both", or "tablet" without Shizuku) needs the runtime audio permission. */
     private fun needsAudioPermission(): Boolean {
         val out = AudioForwarder.output
         val viaCapture = out == AudioForwarder.Output.BOTH || (out == AudioForwarder.Output.TABLET && !ShizukuBridge.ready)
-        return viaCapture && !tabletMode && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
+        return viaCapture && !prefs.tabletMode && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -466,14 +342,14 @@ class MainActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQUEST_CAPTURE) return
         if (resultCode == RESULT_OK && data != null) {
-            val intent = Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_START)
+            startForegroundService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_START)
                 .putExtra(CaptureService.EXTRA_RESULT, resultCode).putExtra(CaptureService.EXTRA_DATA, data)
-                .putExtra(CaptureService.EXTRA_QUALITY, quality)
-            startForegroundService(intent)
-        } else Session.log("שיתוף המסך לא אושר")
+                .putExtra(CaptureService.EXTRA_QUALITY, prefs.preset))
+        } else Session.log(tr("שיתוף המסך לא אושר", "Screen sharing was not approved"))
     }
 
     private fun maybeOpenViewer() {
@@ -484,10 +360,11 @@ class MainActivity : Activity() {
     // ───────────────────────────── Viewer ─────────────────────────────
 
     private fun showViewer() {
-        onViewer = true
+        onViewer = true; viewerOpen = true
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        adaptive.reset()
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
-        root.layoutDirection = View.LAYOUT_DIRECTION_RTL
+        root.layoutDirection = Lang.direction
         viewerRoot = root
         val sv = SurfaceView(this)
         surfaceView = sv
@@ -498,53 +375,49 @@ class MainActivity : Activity() {
             override fun surfaceDestroyed(holder: SurfaceHolder) { stopDecoder() }
         })
         sv.setOnTouchListener { v, ev -> onViewerTouch(v, ev) }
+        sv.setOnGenericMotionListener { v, ev -> onViewerGeneric(v, ev) }
+        sv.isFocusable = true; sv.isFocusableInTouchMode = true
 
         val h = glassCard(24f, 14).apply { alpha = 0.97f }
         hudText = label("", 13f, false, Glass.TEXT)
         h.addView(hudText)
-        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val close = glassButton("סגור תצוגה", 18f, 14f).apply { setOnClickListener { closeViewer() } }
-        val again = glassButton("חבר מחדש", 18f, 14f).apply { setOnClickListener { reconnect() } }
-        val hide = glassButton("הסתר", 18f, 14f).apply { setOnClickListener { hideHud() } }
-        val back = glassButton("חזור", 18f, 14f).apply { setOnClickListener { sendKey(KeyEvent.KEYCODE_BACK) } }
-        muteBtn = glassButton(if (AudioSink.muted) "בטל השתקה" else "השתק", 18f, 14f).apply {
-            setOnClickListener { AudioSink.muted = !AudioSink.muted; text = if (AudioSink.muted) "בטל השתקה" else "השתק"; showHud() }
+        fun btn(t: String, a: () -> Unit) = glassButton(t, 18f, 14f).apply { setOnClickListener { a() } }
+        val fill = btn(if (prefs.fill) tr("התאם למסך", "Fit") else tr("מלא מסך", "Fill")) {}
+        fill.setOnClickListener {
+            prefs.fill = !prefs.fill
+            fill.text = if (prefs.fill) tr("התאם למסך", "Fit") else tr("מלא מסך", "Fill")
+            fitSurface(); showHud()
         }
-        val home = glassButton("בית", 18f, 14f).apply { setOnClickListener { sendKey(KeyEvent.KEYCODE_HOME) } }
-        fillMode = prefs.getBoolean("fill", false)
-        fillBtn = glassButton(if (fillMode) "התאם למסך" else "מלא מסך", 18f, 14f).apply {
-            setOnClickListener {
-                fillMode = !fillMode; prefs.edit().putBoolean("fill", fillMode).apply()
-                text = if (fillMode) "התאם למסך" else "מלא מסך"
-                fitSurface(); showHud()
-            }
+        val mute = btn(if (AudioSink.muted) tr("בטל השתקה", "Unmute") else tr("השתק", "Mute")) {}
+        mute.setOnClickListener {
+            AudioSink.muted = !AudioSink.muted
+            mute.text = if (AudioSink.muted) tr("בטל השתקה", "Unmute") else tr("השתק", "Mute"); showHud()
         }
-        buttons.addView(fillBtn, LinearLayout.LayoutParams(0, -2, 1f))
-        buttons.addView(again, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(8) })
-        buttons.addView(hide, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(8) })
-        buttons.addView(close, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(8) })
-        h.addView(buttons, lp(top = 10))
-        val nav = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        nav.addView(back, LinearLayout.LayoutParams(0, -2, 1f))
-        nav.addView(home, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(8) })
-        nav.addView(muteBtn, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(8) })
-        h.addView(nav, lp(top = 8))
-        h.addView(label("הפס הקטן למעלה פותח את הפאנל הזה · חזור/בית פועלים עם Shizuku", 11f, false, Glass.TEXT_3), lp(top = 8))
+        val rows = listOf(
+            listOf(fill, btn(tr("חבר מחדש", "Reconnect")) { reconnect() }, btn(tr("הסתר", "Hide")) { hideHud() }, btn(tr("סגור", "Close")) { closeViewer() }),
+            listOf(btn(tr("חזור", "Back")) { sendKey(KeyEvent.KEYCODE_BACK) }, btn(tr("בית", "Home")) { sendKey(KeyEvent.KEYCODE_HOME) }, mute)
+        )
+        rows.forEach { r ->
+            val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            r.forEachIndexed { i, b -> line.addView(b, LinearLayout.LayoutParams(0, -2, 1f).apply { if (i > 0) marginStart = dpi(8) }) }
+            h.addView(line, lp(top = 8))
+        }
+        h.addView(label(tr("הפס הקטן למעלה פותח את הפאנל הזה", "The small handle at the top opens this panel"), 11f, false, Glass.TEXT_3), lp(top = 8))
         hud = h
-        root.addView(h, FrameLayout.LayoutParams(min(resources.displayMetrics.widthPixels - dpi(32), dpi(480)), -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dpi(16) })
+        root.addView(h, FrameLayout.LayoutParams(min(resources.displayMetrics.widthPixels - dpi(32), dpi(500)), -2,
+            Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dpi(16) })
 
-        // A small glass handle at the top edge opens the panel. Every other touch goes to the phone.
         val pill = FrameLayout(this).apply {
             isClickable = true
             setOnClickListener { showHud() }
-            addView(View(context).apply {
-                background = GradientDrawable().apply { cornerRadius = dp(3f); setColor(0x66FFFFFF) }
-            }, FrameLayout.LayoutParams(dpi(54), dpi(5), Gravity.CENTER))
+            addView(View(context).apply { background = GradientDrawable().apply { cornerRadius = dp(3f); setColor(0x66FFFFFF) } },
+                FrameLayout.LayoutParams(dpi(54), dpi(5), Gravity.CENTER))
         }
         handle = pill
         root.addView(pill, FrameLayout.LayoutParams(dpi(120), dpi(28), Gravity.TOP or Gravity.CENTER_HORIZONTAL))
 
         setContentView(root)
+        sv.requestFocus()
         hideSystemBars()
         showHud()
         fpsMark = SystemClock.uptimeMillis(); fpsFrames = 0
@@ -559,14 +432,13 @@ class MainActivity : Activity() {
         Session.videoSink = { p ->
             when (p.type) {
                 Wire.CONFIG -> {
-                    try { d.setup(p) } catch (e: Exception) { Session.log("שגיאת מפענח: ${e.message}") }
+                    try { d.setup(p) } catch (e: Exception) { Session.log(tr("שגיאת מפענח: ", "Decoder error: ") + e.message) }
                     handler.post { videoW = p.width; videoH = p.height; matchOrientation(); fitSurface() }
                 }
                 Wire.VIDEO -> d.enqueue(p)
             }
         }
         Session.lastConfig?.let { cfg -> Thread { Session.videoSink?.invoke(cfg) }.start() }
-        // Ask the sender for config + keyframe so the picture starts immediately.
         Session.sendAsync(Wire.Packet(Wire.STATS, 0, 0, 0, byteArrayOf()))
     }
 
@@ -575,17 +447,15 @@ class MainActivity : Activity() {
         decoder?.stop(); decoder = null
     }
 
-    /** Turn the tablet to the stream's orientation so a portrait phone fills it instead of a narrow strip. */
     private fun matchOrientation() {
         if (videoW <= 0 || videoH <= 0) return
-        val want = if (videoH > videoW) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
-            else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        val want = if (videoH > videoW) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         if (requestedOrientation != want) requestedOrientation = want
     }
 
     private fun closeViewer() {
         dismissedConfig = Session.lastConfig
-        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         stopDecoder()
         showHome()
     }
@@ -596,8 +466,8 @@ class MainActivity : Activity() {
         if (rw == 0 || rh == 0) { handler.postDelayed({ fitSurface() }, 50); return }
         if (videoW <= 0 || videoH <= 0) return
         val fit = min(rw.toFloat() / videoW, rh.toFloat() / videoH)
-        val fill = kotlin.math.max(rw.toFloat() / videoW, rh.toFloat() / videoH)
-        val scale = if (fillMode) fill else fit
+        val fill = max(rw.toFloat() / videoW, rh.toFloat() / videoH)
+        val scale = if (prefs.fill) fill else fit
         sv.layoutParams = FrameLayout.LayoutParams((videoW * scale).toInt(), (videoH * scale).toInt(), Gravity.CENTER)
     }
 
@@ -606,16 +476,19 @@ class MainActivity : Activity() {
         val now = SystemClock.uptimeMillis()
         if (d != null && now - fpsMark >= 1000) {
             fps = (d.decoded - fpsFrames) * 1000.0 / (now - fpsMark); fpsFrames = d.decoded; fpsMark = now
+            adaptive.onSecond(fps, Session.senderFps, d.dropped, d.lastQueueDelayMs)
         }
         val state = when {
-            Session.wire == null -> "● לא מחובר — ${Session.status}"
-            (d?.decoded ?: 0L) == 0L -> "● ממתין לתמונה מהמכשיר השני…"
-            else -> "● מציג · ${videoW}×${videoH}"
+            Session.wire == null -> "● " + tr("לא מחובר — ", "Not connected — ") + Session.status
+            (d?.decoded ?: 0L) == 0L -> "● " + tr("ממתין לתמונה מהמכשיר השני…", "Waiting for the picture…")
+            else -> "● " + tr("מציג", "Showing") + " · ${videoW}×${videoH}"
         }
-        val touchMode = (if (Session.senderShizuku) "מגע מלא" else "הקשות בלבד (אין Shizuku)") +
-            " · שמע: " + when { AudioSink.muted -> "מושתק"; AudioSink.playing -> "פעיל (עוצמה בכפתורי הטאבלט)"; else -> "לא מתקבל" }
-        hudText?.text = "$state${if (Session.senderVirtual) " · מסך טאבלט" else ""}\n" +
-            "מתקבל ${"%.0f".format(fps)}fps · נשלח ${Session.senderFps}fps · כבל ${"%.1f".format(Session.rttMs)}ms · פענוח ${"%.1f".format(d?.lastQueueDelayMs ?: 0.0)}ms · נפלו ${d?.dropped ?: 0}\n$touchMode"
+        val touchMode = (if (Session.senderShizuku) tr("מגע מלא", "Full touch") else tr("הקשות בלבד (אין Shizuku)", "Taps only (no Shizuku)")) +
+            " · " + tr("שמע: ", "Audio: ") + when {
+                AudioSink.muted -> tr("מושתק", "muted"); AudioSink.playing -> tr("פעיל", "on"); else -> tr("לא מתקבל", "none") }
+        hudText?.text = "$state${if (Session.senderVirtual) " · " + tr("מסך טאבלט", "tablet screen") else ""}\n" +
+            "${tr("מתקבל", "In")} ${"%.0f".format(fps)}fps · ${tr("נשלח", "Out")} ${Session.senderFps}fps · ${tr("כבל", "Cable")} ${"%.1f".format(Session.rttMs)}ms · " +
+            "${tr("פענוח", "Decode")} ${"%.1f".format(d?.lastQueueDelayMs ?: 0.0)}ms · ${tr("איכות", "Quality")} ${adaptive.percent}%\n$touchMode"
         val h = hud ?: return
         val healthy = Session.wire != null && (d?.decoded ?: 0L) > 0
         if (!healthy && h.visibility != View.VISIBLE) showHud()
@@ -636,10 +509,7 @@ class MainActivity : Activity() {
         h.animate().alpha(0f).translationY(-dp(20f)).setDuration(220).withEndAction { h.visibility = View.GONE; handle?.visibility = View.VISIBLE }.start()
     }
 
-    /**
-     * Streams every touch event (all fingers, down / move / up) to the phone in real time.
-     * Payload: action(1) actionIndex(1) count(1) then count × [id(1) x(4) y(4)], normalised to the video.
-     */
+    /** Real-time multi-touch: action(1) actionIndex(1) count(1) then count × [id(1) x(4) y(4)], normalised. */
     private fun onViewerTouch(v: View, ev: MotionEvent): Boolean {
         val action = ev.actionMasked
         if (action != MotionEvent.ACTION_DOWN && action != MotionEvent.ACTION_UP && action != MotionEvent.ACTION_MOVE &&
@@ -649,10 +519,42 @@ class MainActivity : Activity() {
         val buf = ByteBuffer.allocate(3 + count * 9)
         buf.put((if (action == MotionEvent.ACTION_CANCEL) MotionEvent.ACTION_UP else action).toByte())
         buf.put(ev.actionIndex.toByte()); buf.put(count.toByte())
-        for (i in 0 until count) {
-            buf.put(ev.getPointerId(i).toByte()); buf.putFloat(ev.getX(i) / w); buf.putFloat(ev.getY(i) / h)
-        }
+        for (i in 0 until count) { buf.put(ev.getPointerId(i).toByte()); buf.putFloat(ev.getX(i) / w); buf.putFloat(ev.getY(i) / h) }
         Session.sendAsync(Wire.Packet(Wire.TOUCH2, 0, 0, 0, buf.array()))
+        return true
+    }
+
+    /** Mouse wheel and gamepad sticks/triggers. */
+    private fun onViewerGeneric(v: View, ev: MotionEvent): Boolean {
+        if (!prefs.forwardInput || Session.wire == null) return false
+        val isScroll = ev.actionMasked == MotionEvent.ACTION_SCROLL
+        val isJoystick = ev.isFromSource(InputDevice.SOURCE_JOYSTICK) && ev.actionMasked == MotionEvent.ACTION_MOVE
+        if (!isScroll && !isJoystick) return false
+        val axes = if (isScroll) intArrayOf(MotionEvent.AXIS_VSCROLL, MotionEvent.AXIS_HSCROLL)
+            else intArrayOf(MotionEvent.AXIS_X, MotionEvent.AXIS_Y, MotionEvent.AXIS_Z, MotionEvent.AXIS_RZ,
+                MotionEvent.AXIS_HAT_X, MotionEvent.AXIS_HAT_Y, MotionEvent.AXIS_LTRIGGER, MotionEvent.AXIS_RTRIGGER,
+                MotionEvent.AXIS_GAS, MotionEvent.AXIS_BRAKE)
+        val buf = ByteBuffer.allocate(17 + axes.size * 5)
+        buf.putInt(ev.source).putInt(ev.actionMasked)
+        buf.putFloat(if (isScroll) ev.x / v.width.coerceAtLeast(1) else 0f).putFloat(if (isScroll) ev.y / v.height.coerceAtLeast(1) else 0f)
+        buf.put(axes.size.toByte())
+        axes.forEach { a -> buf.put(a.toByte()); buf.putFloat(ev.getAxisValue(a)) }
+        Session.sendAsync(Wire.Packet(Wire.MOTION2, 0, 0, 0, buf.array()))
+        return true
+    }
+
+    /** Keyboards and gamepad buttons connected to the tablet are sent to the phone while the viewer is open. */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (!onViewer || !prefs.forwardInput || Session.wire == null) return super.dispatchKeyEvent(event)
+        val code = event.keyCode
+        // The tablet keeps its own volume and back-to-home behaviour.
+        if (code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN || code == KeyEvent.KEYCODE_VOLUME_MUTE) return super.dispatchKeyEvent(event)
+        val external = event.device?.let { !it.isVirtual } ?: false
+        if (code == KeyEvent.KEYCODE_BACK && !external) return super.dispatchKeyEvent(event)
+        if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) return true
+        val buf = ByteBuffer.allocate(21).put(event.action.toByte()).putInt(event.source).putInt(code)
+            .putInt(event.metaState).putInt(event.repeatCount).putInt(event.scanCode)
+        Session.sendAsync(Wire.Packet(Wire.KEY2, 0, 0, 0, buf.array()))
         return true
     }
 
@@ -662,9 +564,7 @@ class MainActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     @Suppress("DEPRECATION")
-    override fun onBackPressed() {
-        if (onViewer) closeViewer() else super.onBackPressed()
-    }
+    override fun onBackPressed() { if (onViewer) closeViewer() else super.onBackPressed() }
 
     private fun hideSystemBars() {
         if (Build.VERSION.SDK_INT >= 30) {
@@ -678,21 +578,41 @@ class MainActivity : Activity() {
         }
     }
 
-    @Suppress("DEPRECATION")
     private fun showSystemBars() {
         if (Build.VERSION.SDK_INT >= 30) window.insetsController?.show(WindowInsets.Type.systemBars())
-        else window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
     }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
-        try { unregisterReceiver(usbReceiver) } catch (_: Exception) {}
         stopDecoder()
-        if (isFinishing) {
-            if (Session.streaming) stopCapture()
-            Session.detach("האפליקציה נסגרה")
-            link.close()
-        }
+        viewerOpen = false
+        // The connection lives in LinkService. Stop it only when the user turned automatic connection off.
+        if (isFinishing && ::prefs.isInitialized && prefs.onboarded && !prefs.autoConnect) LinkService.start(this, LinkService.ACTION_STOP)
         super.onDestroy()
+    }
+}
+
+/**
+ * Receiver-side quality controller. Two bad seconds in a row (dropped frames, falling behind the
+ * sender, or slow decoding) step the bitrate down; eight good seconds step it back up.
+ */
+class AdaptiveQuality {
+    private val levels = intArrayOf(100, 75, 55, 40)
+    private var level = 0
+    private var bad = 0; private var good = 0
+    private var lastDropped = 0L
+    val percent: Int get() = levels[level]
+
+    fun reset() { level = 0; bad = 0; good = 0; lastDropped = 0 }
+
+    fun onSecond(recvFps: Double, sentFps: Int, dropped: Long, decodeMs: Double) {
+        val newDrops = dropped - lastDropped; lastDropped = dropped
+        if (sentFps <= 0) return
+        val struggling = newDrops > 0 || (sentFps >= 20 && recvFps < sentFps * 0.85) || decodeMs > 45
+        if (struggling) { bad++; good = 0 } else { good++; bad = 0 }
+        val before = level
+        if (bad >= 2 && level < levels.size - 1) { level++; bad = 0 }
+        if (good >= 8 && level > 0) { level--; good = 0 }
+        if (level != before) Session.sendAsync(Wire.Packet(Wire.BITRATE, 0, 0, 0, ByteBuffer.allocate(4).putInt(percent).array()))
     }
 }

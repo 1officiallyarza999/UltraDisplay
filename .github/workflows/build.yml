@@ -2,7 +2,7 @@ name: UltraDisplay - Build APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'wip/**']
   workflow_dispatch:
 
 jobs:
