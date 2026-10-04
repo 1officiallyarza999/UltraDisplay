@@ -45,7 +45,6 @@ class CaptureService : Service() {
     private var projection: MediaProjection? = null
     private var display: VirtualDisplay? = null
     private var encoder: MediaCodec? = null
-    private var surface: Surface? = null
     @Volatile private var running = false
 
     override fun onBind(i: Intent?): IBinder? = null
@@ -85,25 +84,65 @@ class CaptureService : Service() {
                 override fun onStop() { Session.log("שיתוף המסך הסתיים"); stopSelf() }
             }, Handler(Looper.getMainLooper()))
 
-            val metrics = DisplayMetrics()
-            @Suppress("DEPRECATION")
-            (getSystemService(DISPLAY_SERVICE) as DisplayManager).getDisplay(Display.DEFAULT_DISPLAY).getRealMetrics(metrics)
-
-            val (codec, cfg) = openEncoder(metrics.widthPixels, metrics.heightPixels, quality)
-            encoder = codec; liveCodec = codec
-            surface = codec.createInputSurface()
+            this.quality = quality
+            val m = realMetrics()
+            densityDpi = m.densityDpi
+            val (codec, cfg) = openEncoder(m.widthPixels, m.heightPixels, quality)
+            val input = codec.createInputSurface()
             codec.start()
-            display = proj.createVirtualDisplay("UltraDisplay", cfg.first, cfg.second, metrics.densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, surface, null, Handler(Looper.getMainLooper()))
+            display = proj.createVirtualDisplay("UltraDisplay", cfg.first, cfg.second, densityDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, input, null, Handler(Looper.getMainLooper()))
             running = true
             Session.streaming = true
-            Session.streamInfo = "${cfg.first}×${cfg.second} · ${cfg.third.fps}fps · ${cfg.third.bitrate / 1_000_000}Mbps"
-            Session.log("משדר ${Session.streamInfo}")
-            thread(name = "ultra-encoder") { encodeLoop(codec, cfg.first, cfg.second) }
+            startLoop(codec, input, cfg, m.widthPixels > m.heightPixels)
+            displayManager.registerDisplayListener(rotationListener, Handler(Looper.getMainLooper()))
         } catch (e: Exception) {
             Session.set(Session.Link.ERROR, "שגיאת שידור: ${e.message}"); stopSelf()
         }
         return START_NOT_STICKY
+    }
+
+    private val displayManager get() = getSystemService(DISPLAY_SERVICE) as DisplayManager
+    private var quality = 2
+    private var densityDpi = 320
+    private var landscape = false
+    private val generation = java.util.concurrent.atomic.AtomicInteger(0)
+
+    private fun realMetrics(): DisplayMetrics {
+        val m = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        displayManager.getDisplay(Display.DEFAULT_DISPLAY).getRealMetrics(m)
+        return m
+    }
+
+    private fun startLoop(codec: MediaCodec, input: Surface, cfg: Triple<Int, Int, Preset>, isLandscape: Boolean) {
+        val gen = generation.incrementAndGet()
+        encoder = codec; liveCodec = codec; liveConfig = null; landscape = isLandscape
+        Session.streamInfo = "${cfg.first}×${cfg.second} · ${cfg.third.fps}fps · ${cfg.third.bitrate / 1_000_000}Mbps"
+        Session.log("משדר ${Session.streamInfo}")
+        thread(name = "ultra-encoder-$gen") { encodeLoop(codec, input, cfg.first, cfg.second, gen) }
+    }
+
+    /** When the phone rotates, rebuild the stream in the new orientation so it fills the tablet. */
+    private val rotationListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {}
+        override fun onDisplayRemoved(displayId: Int) {}
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId != Display.DEFAULT_DISPLAY || !running) return
+            val m = realMetrics()
+            val nowLandscape = m.widthPixels > m.heightPixels
+            if (nowLandscape == landscape) return
+            val vd = display ?: return
+            try {
+                val (codec, cfg) = openEncoder(m.widthPixels, m.heightPixels, quality)
+                val input = codec.createInputSurface()
+                codec.start()
+                vd.resize(cfg.first, cfg.second, m.densityDpi)
+                vd.surface = input
+                Session.log(if (nowLandscape) "הטלפון סובב לרוחב" else "הטלפון סובב לאורך")
+                startLoop(codec, input, cfg, nowLandscape)
+            } catch (e: Exception) { Session.log("שגיאה בסיבוב: ${e.message}") }
+        }
     }
 
     private fun even16(v: Int) = max(16, (v / 16) * 16)
@@ -137,10 +176,11 @@ class CaptureService : Service() {
         throw IllegalStateException("המקודד סירב לכל ההגדרות: ${lastError?.message}")
     }
 
-    private fun encodeLoop(codec: MediaCodec, width: Int, height: Int) {
+    private fun encodeLoop(codec: MediaCodec, input: Surface, width: Int, height: Int, gen: Int) {
         val info = MediaCodec.BufferInfo()
+        val current = { running && generation.get() == gen && Session.wire != null }
         try {
-            while (running && Session.wire != null) {
+            while (current()) {
                 val index = codec.dequeueOutputBuffer(info, 10_000)
                 if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     val fmt = codec.outputFormat
@@ -153,7 +193,7 @@ class CaptureService : Service() {
                     }
                 } else if (index >= 0) {
                     val buf = codec.getOutputBuffer(index)
-                    if (buf != null && info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                    if (buf != null && info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 && generation.get() == gen) {
                         buf.position(info.offset); buf.limit(info.offset + info.size)
                         val bytes = ByteArray(info.size); buf.get(bytes)
                         Session.wire?.send(Wire.Packet(Wire.VIDEO, info.presentationTimeUs, width, height, bytes))
@@ -162,19 +202,24 @@ class CaptureService : Service() {
                     if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
                 }
             }
-        } catch (e: Exception) { Session.log("השידור נעצר: ${e.message}") }
-        finally { Handler(Looper.getMainLooper()).post { stopSelf() } }
+        } catch (e: Exception) { if (generation.get() == gen) Session.log("השידור נעצר: ${e.message}") }
+        finally {
+            try { codec.stop() } catch (_: Exception) {}
+            try { codec.release() } catch (_: Exception) {}
+            try { input.release() } catch (_: Exception) {}
+            // Only the newest encoder ends the session; a replaced one (after rotation) just retires.
+            if (generation.get() == gen) Handler(Looper.getMainLooper()).post { stopSelf() }
+        }
     }
 
     override fun onDestroy() {
         running = false
+        generation.incrementAndGet()
         Session.streaming = false
         liveCodec = null; liveConfig = null
+        try { displayManager.unregisterDisplayListener(rotationListener) } catch (_: Exception) {}
         Session.sendAsync(Wire.Packet(Wire.STREAM_END, 0, 0, 0, byteArrayOf()))
         try { display?.release() } catch (_: Exception) {}
-        try { encoder?.stop() } catch (_: Exception) {}
-        try { encoder?.release() } catch (_: Exception) {}
-        try { surface?.release() } catch (_: Exception) {}
         try { projection?.stop() } catch (_: Exception) {}
         Session.log("שידור הופסק")
         super.onDestroy()

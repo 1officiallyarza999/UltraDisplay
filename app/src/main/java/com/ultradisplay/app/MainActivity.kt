@@ -51,6 +51,8 @@ class MainActivity : Activity() {
     private var hudText: TextView? = null
     private var hudHideAt = 0L
     private var videoW = 0; private var videoH = 0
+    private var fillMode = false
+    private var fillBtn: TextView? = null
     private var fpsMark = 0L; private var fpsFrames = 0L; private var fps = 0.0
     private var downX = 0f; private var downY = 0f; private var downAt = 0L; private var multiTouch = false
 
@@ -240,7 +242,7 @@ class MainActivity : Activity() {
         diag.addView(logView, lp(top = 10))
         col.addView(diag, lp(top = 16))
 
-        col.addView(label("UltraDisplay v0.2", 11f, false, Glass.TEXT_3).apply { textAlignment = View.TEXT_ALIGNMENT_CENTER }, lp(top = 18))
+        col.addView(label("UltraDisplay v0.2.1", 11f, false, Glass.TEXT_3).apply { textAlignment = View.TEXT_ALIGNMENT_CENTER }, lp(top = 18))
 
         setContentView(root)
         updateHome()
@@ -395,11 +397,20 @@ class MainActivity : Activity() {
         val close = glassButton("סגור תצוגה", 18f, 14f).apply { setOnClickListener { closeViewer() } }
         val again = glassButton("חבר מחדש", 18f, 14f).apply { setOnClickListener { reconnect() } }
         val hide = glassButton("הסתר", 18f, 14f).apply { setOnClickListener { hideHud() } }
-        buttons.addView(close, LinearLayout.LayoutParams(0, -2, 1f))
+        fillMode = prefs.getBoolean("fill", false)
+        fillBtn = glassButton(if (fillMode) "התאם למסך" else "מלא מסך", 18f, 14f).apply {
+            setOnClickListener {
+                fillMode = !fillMode; prefs.edit().putBoolean("fill", fillMode).apply()
+                text = if (fillMode) "התאם למסך" else "מלא מסך"
+                fitSurface(); showHud()
+            }
+        }
+        buttons.addView(fillBtn, LinearLayout.LayoutParams(0, -2, 1f))
         buttons.addView(again, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(8) })
         buttons.addView(hide, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(8) })
+        buttons.addView(close, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dpi(8) })
         h.addView(buttons, lp(top = 10))
-        h.addView(label("נגיעה בשלוש אצבעות מציגה את הפאנל הזה", 11f, false, Glass.TEXT_3), lp(top = 8))
+        h.addView(label("נגיעה בשלוש אצבעות מציגה את הפאנל הזה · הטאבלט מסתובב לפי הטלפון", 11f, false, Glass.TEXT_3), lp(top = 8))
         hud = h
         root.addView(h, FrameLayout.LayoutParams(min(resources.displayMetrics.widthPixels - dpi(32), dpi(460)), -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dpi(16) })
 
@@ -407,7 +418,8 @@ class MainActivity : Activity() {
         hideSystemBars()
         showHud()
         fpsMark = SystemClock.uptimeMillis(); fpsFrames = 0
-        if (Session.lastConfig != null) Session.lastConfig?.let { videoW = it.width; videoH = it.height }
+        Session.lastConfig?.let { videoW = it.width; videoH = it.height }
+        matchOrientation()
         handler.post { fitSurface() }
     }
 
@@ -418,7 +430,7 @@ class MainActivity : Activity() {
             when (p.type) {
                 Wire.CONFIG -> {
                     try { d.setup(p) } catch (e: Exception) { Session.log("שגיאת מפענח: ${e.message}") }
-                    handler.post { videoW = p.width; videoH = p.height; fitSurface() }
+                    handler.post { videoW = p.width; videoH = p.height; matchOrientation(); fitSurface() }
                 }
                 Wire.VIDEO -> d.enqueue(p)
             }
@@ -433,8 +445,17 @@ class MainActivity : Activity() {
         decoder?.stop(); decoder = null
     }
 
+    /** Turn the tablet to the stream's orientation so a portrait phone fills it instead of a narrow strip. */
+    private fun matchOrientation() {
+        if (videoW <= 0 || videoH <= 0) return
+        val want = if (videoH > videoW) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        if (requestedOrientation != want) requestedOrientation = want
+    }
+
     private fun closeViewer() {
         dismissedConfig = Session.lastConfig
+        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         stopDecoder()
         showHome()
     }
@@ -444,7 +465,9 @@ class MainActivity : Activity() {
         val rw = root.width; val rh = root.height
         if (rw == 0 || rh == 0) { handler.postDelayed({ fitSurface() }, 50); return }
         if (videoW <= 0 || videoH <= 0) return
-        val scale = min(rw.toFloat() / videoW, rh.toFloat() / videoH)
+        val fit = min(rw.toFloat() / videoW, rh.toFloat() / videoH)
+        val fill = kotlin.math.max(rw.toFloat() / videoW, rh.toFloat() / videoH)
+        val scale = if (fillMode) fill else fit
         sv.layoutParams = FrameLayout.LayoutParams((videoW * scale).toInt(), (videoH * scale).toInt(), Gravity.CENTER)
     }
 
