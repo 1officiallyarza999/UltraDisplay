@@ -4,14 +4,33 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-    <application android:label="UltraDisplay" android:theme="@android:style/Theme.Material.NoActionBar" android:usesCleartextTraffic="false" android:allowBackup="false">
-        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="unspecified">
-            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="false"
+        android:allowBackup="false">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- This device is the USB peripheral: the other device switched it into accessory mode. -->
             <intent-filter><action android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED"/></intent-filter>
             <meta-data android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" android:resource="@xml/accessory_filter"/>
+            <!-- This device is the USB host and the other device came back in accessory mode. -->
+            <intent-filter><action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"/></intent-filter>
+            <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" android:resource="@xml/device_filter"/>
         </activity>
-        <service android:name=".CaptureService" android:foregroundServiceType="mediaProjection" android:exported="false" />
-        <service android:name=".RemoteTouchService" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:exported="true" android:label="UltraDisplay touch control">
+        <service android:name=".CaptureService" android:foregroundServiceType="mediaProjection" android:exported="false"/>
+        <service android:name=".RemoteTouchService" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:exported="true" android:label="UltraDisplay · שליטה במגע">
             <intent-filter><action android:name="android.accessibilityservice.AccessibilityService"/></intent-filter>
             <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility"/>
         </service>

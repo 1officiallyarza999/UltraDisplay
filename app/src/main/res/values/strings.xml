@@ -1,1 +1,5 @@
-<resources><string name="accessibility_description">Allows taps on the Galaxy Tab A8 to control the S25 Ultra. Enable manually only if needed.</string></resources>
+<resources>
+    <string name="app_name">UltraDisplay</string>
+    <string name="accessibility_description">מאפשר לנגיעות על הטאבלט לשלוט בטלפון כשהוא משדר אליו דרך UltraDisplay. השירות רק מבצע הקשות וגרירות — הוא לא קורא את תוכן המסך. הפעל רק אם אתה צריך שליטה במגע.</string>
+    <color name="ic_bg">#0A0F24</color>
+</resources>

@@ -1,19 +1,25 @@
 package com.ultradisplay.app
 
-import android.util.Log
 import java.io.*
-import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** One writer lock keeps VIDEO and STATUS packets from interleaving over USB. */
-class Wire(private val input: InputStream, private val output: OutputStream) : Closeable {
+/** Framed packet channel over USB. One writer lock keeps packets from interleaving. */
+class Wire(
+    private val input: InputStream,
+    private val output: OutputStream,
+    private val onClose: () -> Unit = {}
+) : Closeable {
     private val inStream = DataInputStream(BufferedInputStream(input, 128 * 1024))
     private val outStream = DataOutputStream(BufferedOutputStream(output, 128 * 1024))
     private val alive = AtomicBoolean(true)
+    val isAlive: Boolean get() = alive.get()
+
     data class Packet(val type: Int, val timestampUs: Long, val width: Int, val height: Int, val bytes: ByteArray)
+
     companion object {
         const val MAGIC = 0x554C5452
-        const val CONFIG = 1; const val VIDEO = 2; const val TOUCH = 3; const val PING = 4; const val PONG = 5; const val STATS = 6
+        const val CONFIG = 1; const val VIDEO = 2; const val TOUCH = 3; const val PING = 4; const val PONG = 5
+        const val STATS = 6; const val HELLO = 7; const val STREAM_END = 8
         const val MAX_PACKET = 2_000_000
         fun packConfig(sps: ByteArray, pps: ByteArray): ByteArray = ByteArrayOutputStream().also { b ->
             DataOutputStream(b).use { it.writeInt(sps.size); it.write(sps); it.writeInt(pps.size); it.write(pps) }
@@ -25,6 +31,7 @@ class Wire(private val input: InputStream, private val output: OutputStream) : C
             return sps to pps
         }
     }
+
     @Synchronized fun send(p: Packet) {
         if (!alive.get()) return
         require(p.bytes.size <= MAX_PACKET)
@@ -32,14 +39,21 @@ class Wire(private val input: InputStream, private val output: OutputStream) : C
         outStream.writeInt(p.width); outStream.writeInt(p.height); outStream.writeInt(p.bytes.size)
         outStream.write(p.bytes); outStream.flush()
     }
+
     fun receive(): Packet {
-        require(inStream.readInt() == MAGIC) { "Invalid USB stream" }
+        val magic = inStream.readInt()
+        if (magic != MAGIC) throw IOException("Invalid USB stream (magic %08x)".format(magic))
         val t = inStream.readInt(); val ts = inStream.readLong(); val w = inStream.readInt(); val h = inStream.readInt()
-        val len = inStream.readInt(); require(len in 0..MAX_PACKET) { "Invalid packet $len" }
+        val len = inStream.readInt(); if (len !in 0..MAX_PACKET) throw IOException("Invalid packet length $len")
         val bytes = ByteArray(len); inStream.readFully(bytes)
         return Packet(t, ts, w, h, bytes)
     }
+
     override fun close() {
-        if (alive.getAndSet(false)) { try { input.close() } catch (_: Exception) {}; try { output.close() } catch (_: Exception) {} }
+        if (alive.getAndSet(false)) {
+            try { input.close() } catch (_: Exception) {}
+            try { output.close() } catch (_: Exception) {}
+            try { onClose() } catch (_: Exception) {}
+        }
     }
 }
